@@ -2,19 +2,39 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import List, Dict
 
 import numpy as np
 import pandas as pd
+
+# For dashboard exports
+import matplotlib.pyplot as plt
+
+# For Excel dashboard
+from openpyxl import load_workbook
+from openpyxl.styles import Font, Alignment
+from openpyxl.utils import get_column_letter
+
+# For final memo PDF
+from reportlab.lib.pagesizes import letter
+from reportlab.pdfgen import canvas
 
 
 # =========================
 # Paths (as per hierarchy)
 # =========================
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
 RAW_DIR = PROJECT_ROOT / "raw_layer"
-OUT_DIR = PROJECT_ROOT / "data"
-OUT_DIR.mkdir(parents=True, exist_ok=True)
+
+DATA_DIR = PROJECT_ROOT / "data"                  # generated outputs only
+ANALYSIS_DIR = PROJECT_ROOT / "analysis"           # generated analysis artifacts
+DASHBOARD_DIR = PROJECT_ROOT / "dashboard"         # dashboard file
+EXPORTS_DIR = DASHBOARD_DIR / "exports"            # charts/images/pdf exports
+FINAL_STORY_DIR = PROJECT_ROOT / "final_story"     # final memo/deck
+
+for d in [DATA_DIR, ANALYSIS_DIR, DASHBOARD_DIR, EXPORTS_DIR, FINAL_STORY_DIR]:
+    d.mkdir(parents=True, exist_ok=True)
 
 
 # =========================
@@ -35,8 +55,7 @@ def read_json(name: str):
         return json.load(f)
 
 
-def write_csv(df: pd.DataFrame, name: str) -> None:
-    path = OUT_DIR / name
+def write_csv(df: pd.DataFrame, path: Path) -> None:
     df.to_csv(path, index=False)
     print(f"✅ Wrote: {path}")
 
@@ -93,7 +112,6 @@ def discount_pct(gross: pd.Series, discount: pd.Series) -> pd.Series:
 
 def week_start(dt: pd.Series) -> pd.Series:
     d = pd.to_datetime(dt, errors="coerce")
-    # Monday week start
     return (d - pd.to_timedelta(d.dt.weekday, unit="D")).dt.date
 
 
@@ -151,7 +169,6 @@ def clamp01(s: pd.Series) -> pd.Series:
 def compute_score_and_reasons(fact: pd.DataFrame) -> pd.DataFrame:
     df = fact.copy()
 
-    # ensure all features exist
     for f in WEIGHTS.keys():
         if f not in df.columns:
             df[f] = 0
@@ -167,17 +184,9 @@ def compute_score_and_reasons(fact: pd.DataFrame) -> pd.DataFrame:
         df[ccol] = w * v
         contrib_cols.append(ccol)
 
-    df["risk_score"] = (
-        df[contrib_cols].sum(axis=1).round().clip(0, 100).astype(int)
-    )
+    df["risk_score"] = df[contrib_cols].sum(axis=1).round().clip(0, 100).astype(int)
+    df["risk_band"] = pd.cut(df["risk_score"], bins=[-1, 39, 69, 100], labels=["Low", "Medium", "High"]).astype("string")
 
-    df["risk_band"] = pd.cut(
-        df["risk_score"],
-        bins=[-1, 39, 69, 100],
-        labels=["Low", "Medium", "High"]
-    ).astype("string")
-
-    # top 3 reasons
     feat_from_col = {c: c.replace("contrib__", "") for c in contrib_cols}
 
     def top3(row) -> List[str]:
@@ -196,9 +205,7 @@ def compute_score_and_reasons(fact: pd.DataFrame) -> pd.DataFrame:
     reasons_df.columns = ["reason_1", "reason_2", "reason_3"]
     df = pd.concat([df, reasons_df], axis=1)
 
-    # drop contrib columns (optional; keep if you want explainability debugging)
     df.drop(columns=contrib_cols, inplace=True, errors="ignore")
-
     return df
 
 
@@ -227,11 +234,6 @@ def recommend_action(row: pd.Series) -> str:
 # Products flatten
 # =========================
 def flatten_products(products_json) -> pd.DataFrame:
-    """
-    Supports:
-    - list of product dicts
-    - or {"products": [...]}
-    """
     if isinstance(products_json, dict) and "products" in products_json:
         products_json = products_json["products"]
 
@@ -262,7 +264,6 @@ def build_fact_orders_enriched(
     products: pd.DataFrame
 ) -> pd.DataFrame:
 
-    # standardize + parse dates (only if those cols exist)
     users = parse_dt(standardize_df(users), ["signup_ts", "created_at"])
     sessions = parse_dt(standardize_df(sessions), ["session_ts", "created_at"])
     orders = parse_dt(standardize_df(orders), ["order_ts", "created_at"])
@@ -273,7 +274,6 @@ def build_fact_orders_enriched(
     coupons = standardize_df(coupons)
     products = standardize_df(products)
 
-    # dedup basics
     if "user_id" in users.columns:
         users = dedup_keep_last(users, ["user_id"], order_col="signup_ts" if "signup_ts" in users.columns else None)
 
@@ -283,43 +283,34 @@ def build_fact_orders_enriched(
     if "order_id" in orders.columns:
         orders = dedup_keep_last(orders, ["order_id"], order_col="order_ts" if "order_ts" in orders.columns else None)
 
-    # enforce core columns (create if missing so pipeline runs)
     for c in ["order_id", "user_id", "session_id", "gross_amount", "discount_amount", "net_amount", "payment_method", "coupon_id"]:
         if c not in orders.columns:
             orders[c] = pd.NA
 
-    # normalize categoricals
     orders["payment_method"] = safe_lower(orders["payment_method"]).fillna("unknown")
     orders["coupon_id"] = safe_lower(orders["coupon_id"]).fillna("none")
 
     if "shipping_city" in orders.columns:
         orders["shipping_city"] = safe_lower(orders["shipping_city"]).fillna("unknown")
+
     if "shipping_pincode" in orders.columns:
         orders["shipping_pincode"] = orders["shipping_pincode"].astype("string").str.strip().fillna("unknown")
     else:
         orders["shipping_pincode"] = "unknown"
 
-    # numeric amounts
     for c in ["gross_amount", "discount_amount", "net_amount"]:
         orders[c] = pd.to_numeric(orders[c], errors="coerce").fillna(0)
 
-    # discount pct
     orders["discount_pct"] = discount_pct(orders["gross_amount"], orders["discount_amount"])
 
-    # products mapping (product_id -> category)
     if "product_id" in products.columns:
         products["product_id"] = products["product_id"].astype("string").str.strip()
     if "product_id" in order_items.columns:
         order_items["product_id"] = order_items["product_id"].astype("string").str.strip()
 
     if "product_id" in order_items.columns and "product_id" in products.columns:
-        order_items = order_items.merge(
-            products[["product_id", "category"]].drop_duplicates(),
-            on="product_id",
-            how="left"
-        )
+        order_items = order_items.merge(products[["product_id", "category"]].drop_duplicates(), on="product_id", how="left")
 
-    # order_items aggregation
     if "qty" not in order_items.columns:
         order_items["qty"] = 1
     order_items["qty"] = pd.to_numeric(order_items["qty"], errors="coerce").fillna(1)
@@ -339,7 +330,6 @@ def build_fact_orders_enriched(
     else:
         items_agg["top_category"] = "unknown"
 
-    # payments aggregation
     if "status" in payments.columns:
         payments["status"] = safe_lower(payments["status"])
         payments["is_fail"] = payments["status"].str.contains("fail", na=False).astype(int)
@@ -355,7 +345,6 @@ def build_fact_orders_enriched(
     )
     pay_agg["payment_failed_attempts_score"] = (pay_agg["failed_attempts"].clip(upper=10) / 10.0)
 
-    # refunds aggregation
     if "refund_amount" not in refunds.columns:
         refunds["refund_amount"] = 0
     refunds["refund_amount"] = pd.to_numeric(refunds["refund_amount"], errors="coerce").fillna(0)
@@ -365,7 +354,6 @@ def build_fact_orders_enriched(
         refund_amount=("refund_amount", "sum"),
     )
 
-    # shipments aggregation
     if "status" in shipments.columns:
         shipments["status"] = safe_lower(shipments["status"])
         shipments["rto_flag"] = shipments["status"].str.contains("rto", na=False).astype(int)
@@ -379,9 +367,9 @@ def build_fact_orders_enriched(
         delivered_flag=("delivered_flag", "max"),
     )
 
-    # coupons reference
     if "coupon_id" in coupons.columns:
         coupons["coupon_id"] = safe_lower(coupons["coupon_id"]).fillna("none")
+
     if "discount_pct" in coupons.columns:
         coupons["coupon_discount_pct"] = pd.to_numeric(coupons["discount_pct"], errors="coerce")
     elif "coupon_discount_pct" not in coupons.columns:
@@ -389,17 +377,18 @@ def build_fact_orders_enriched(
 
     coupons_ref = coupons[["coupon_id", "coupon_discount_pct"]].drop_duplicates()
 
-    # base fact join
     fact = orders.copy()
-    fact = fact.merge(users, on="user_id", how="left", suffixes=("", "_user")) if "user_id" in users.columns else fact
-    fact = fact.merge(sessions, on="session_id", how="left", suffixes=("", "_session")) if "session_id" in sessions.columns else fact
+    if "user_id" in users.columns:
+        fact = fact.merge(users, on="user_id", how="left", suffixes=("", "_user"))
+    if "session_id" in sessions.columns:
+        fact = fact.merge(sessions, on="session_id", how="left", suffixes=("", "_session"))
+
     fact = fact.merge(items_agg, on="order_id", how="left")
     fact = fact.merge(pay_agg, on="order_id", how="left")
     fact = fact.merge(refund_agg, on="order_id", how="left")
     fact = fact.merge(ship_agg, on="order_id", how="left")
     fact = fact.merge(coupons_ref, on="coupon_id", how="left")
 
-    # fill
     for c, d in [
         ("item_count", 0), ("total_qty", 0), ("top_category", "unknown"),
         ("payment_attempts", 0), ("failed_attempts", 0), ("success_attempts", 0),
@@ -410,15 +399,11 @@ def build_fact_orders_enriched(
         if c in fact.columns:
             fact[c] = fact[c].fillna(d)
 
-    # -------------------------
-    # Feature engineering (12)
-    # -------------------------
+    # ---- engineered signals ----
     fact["high_discount_flag"] = (fact["discount_pct"] >= 50).astype(int)
     fact["coupon_used_flag"] = (fact["coupon_id"].astype("string") != "none").astype(int)
     fact["cod_flag"] = fact["payment_method"].astype("string").str.contains("cod", na=False).astype(int)
 
-    # new user
-    # supports either signup_ts or created_at in users and order_ts or created_at in orders
     signup_col = "signup_ts" if "signup_ts" in fact.columns else ("created_at" if "created_at" in fact.columns else None)
     order_col = "order_ts" if "order_ts" in fact.columns else ("created_at" if "created_at" in fact.columns else None)
 
@@ -432,7 +417,6 @@ def build_fact_orders_enriched(
 
     fact["new_user_plus_coupon"] = ((fact["new_user_flag"] == 1) & (fact["coupon_used_flag"] == 1)).astype(int)
 
-    # refund history by user (dataset-wide approximation)
     if "user_id" in fact.columns:
         user_ref = fact.groupby("user_id")["refund_flag"].sum().rename("prior_refunds_count").reset_index()
         fact = fact.merge(user_ref, on="user_id", how="left")
@@ -442,7 +426,6 @@ def build_fact_orders_enriched(
         fact["prior_refunds_count"] = 0
         fact["refund_history_user_flag"] = 0
 
-    # device reuse / pincode reuse
     if "device_id" in fact.columns:
         fact["device_id"] = fact["device_id"].astype("string").str.strip().fillna("unknown")
         device_cnt = fact.groupby("device_id")["order_id"].count().rename("device_orders_count").reset_index()
@@ -453,16 +436,11 @@ def build_fact_orders_enriched(
         fact["device_orders_count"] = 1
         fact["device_reuse_score"] = 0
 
-    if "shipping_pincode" in fact.columns:
-        pin_cnt = fact.groupby("shipping_pincode")["order_id"].count().rename("pincode_orders_count").reset_index()
-        fact = fact.merge(pin_cnt, on="shipping_pincode", how="left")
-        fact["pincode_orders_count"] = fact["pincode_orders_count"].fillna(1).astype(int)
-        fact["pincode_reuse_score"] = (fact["pincode_orders_count"].clip(upper=20) / 20.0)
-    else:
-        fact["pincode_orders_count"] = 1
-        fact["pincode_reuse_score"] = 0
+    pin_cnt = fact.groupby("shipping_pincode")["order_id"].count().rename("pincode_orders_count").reset_index()
+    fact = fact.merge(pin_cnt, on="shipping_pincode", how="left")
+    fact["pincode_orders_count"] = fact["pincode_orders_count"].fillna(1).astype(int)
+    fact["pincode_reuse_score"] = (fact["pincode_orders_count"].clip(upper=20) / 20.0)
 
-    # coupon repeat user / device
     if "user_id" in fact.columns:
         user_coupon = fact[fact["coupon_used_flag"] == 1].groupby("user_id")["order_id"].count().rename("coupon_orders_user").reset_index()
         fact = fact.merge(user_coupon, on="user_id", how="left")
@@ -486,7 +464,6 @@ def build_fact_orders_enriched(
         fact["coupon_users_per_device"] = 0
         fact["coupon_device_reuse_flag"] = 0
 
-    # high RTO pincode flag (dataset-derived)
     p = fact.groupby("shipping_pincode").agg(
         pincode_orders=("order_id", "count"),
         pincode_rto=("rto_flag", "sum"),
@@ -496,7 +473,6 @@ def build_fact_orders_enriched(
     fact["pincode_rto_rate"] = fact["pincode_rto_rate"].fillna(0)
     fact["high_rto_pincode_flag"] = (fact["pincode_rto_rate"] >= 0.25).astype(int)
 
-    # value outlier within category
     fact["top_category"] = fact["top_category"].astype("string").fillna("unknown")
     fact["net_amount"] = pd.to_numeric(fact["net_amount"], errors="coerce").fillna(0)
     fact["net_amount_z"] = zscore_within_group(fact, "top_category", "net_amount")
@@ -506,13 +482,12 @@ def build_fact_orders_enriched(
 
 
 # =========================
-# Weekly user table
+# Weekly + Queue
 # =========================
 def build_user_weekly(fact: pd.DataFrame) -> pd.DataFrame:
     df = fact.copy()
     if "order_ts" not in df.columns:
         df["order_ts"] = pd.NaT
-
     df["week_start"] = week_start(df["order_ts"]).astype("string")
 
     out = df.groupby(["user_id", "week_start"], as_index=False).agg(
@@ -533,14 +508,10 @@ def build_user_weekly(fact: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-# =========================
-# Investigation queue
-# =========================
 def build_queue(fact: pd.DataFrame) -> pd.DataFrame:
     df = fact.copy()
     df["recommended_action"] = df.apply(recommend_action, axis=1)
 
-    # ensure evidence fields exist
     defaults = {
         "discount_pct": 0,
         "failed_attempts": 0,
@@ -574,16 +545,359 @@ def build_queue(fact: pd.DataFrame) -> pd.DataFrame:
 
 
 # =========================
+# Analysis artifacts
+# =========================
+def build_analysis_artifacts(fact: pd.DataFrame, weekly: pd.DataFrame, queue: pd.DataFrame) -> Dict[str, pd.DataFrame]:
+    # Weekly KPI table (for dashboard + report)
+    kpi_weekly = weekly.groupby("week_start", as_index=False).agg(
+        orders=("orders_count", "sum"),
+        net_revenue=("net_revenue", "sum"),
+        refunds=("refunds_count", "sum"),
+        refund_amount=("refund_amount", "sum"),
+        rto=("rto_count", "sum"),
+        coupon_orders=("coupon_orders_count", "sum"),
+        payment_failures=("payment_failures_count", "sum"),
+        avg_risk=("risk_score_avg", "mean"),
+    )
+    kpi_weekly["refund_rate"] = (kpi_weekly["refunds"] / kpi_weekly["orders"]).replace([np.inf, np.nan], 0).round(4)
+    kpi_weekly["rto_rate"] = (kpi_weekly["rto"] / kpi_weekly["orders"]).replace([np.inf, np.nan], 0).round(4)
+
+    # Top patterns (simple but strong)
+    # Pattern 1: coupon_id
+    by_coupon = fact.groupby("coupon_id", as_index=False).agg(
+        orders=("order_id", "count"),
+        refund_amount=("refund_amount", "sum"),
+        rto=("rto_flag", "sum"),
+        avg_risk=("risk_score", "mean"),
+        avg_discount=("discount_pct", "mean"),
+    ).sort_values(["avg_risk", "orders"], ascending=[False, False])
+
+    # Pattern 2: pincode
+    by_pincode = fact.groupby("shipping_pincode", as_index=False).agg(
+        orders=("order_id", "count"),
+        refund_amount=("refund_amount", "sum"),
+        rto=("rto_flag", "sum"),
+        avg_risk=("risk_score", "mean"),
+        rto_rate=("pincode_rto_rate", "mean"),
+    ).sort_values(["avg_risk", "orders"], ascending=[False, False])
+
+    # Pattern 3: device_id (if present)
+    if "device_id" in fact.columns:
+        by_device = fact.groupby("device_id", as_index=False).agg(
+            orders=("order_id", "count"),
+            users=("user_id", "nunique"),
+            refund_amount=("refund_amount", "sum"),
+            avg_risk=("risk_score", "mean"),
+        ).sort_values(["users", "avg_risk"], ascending=[False, False])
+    else:
+        by_device = pd.DataFrame(columns=["device_id", "orders", "users", "refund_amount", "avg_risk"])
+
+    # Summarize patterns (top 10 each)
+    patterns_summary = pd.concat([
+        by_coupon.head(10).assign(pattern_type="coupon"),
+        by_pincode.head(10).assign(pattern_type="pincode"),
+        by_device.head(10).assign(pattern_type="device"),
+    ], ignore_index=True)
+
+    return {
+        "kpi_weekly": kpi_weekly,
+        "patterns_summary": patterns_summary,
+        "by_coupon": by_coupon,
+        "by_pincode": by_pincode,
+        "by_device": by_device,
+    }
+
+
+def export_analysis_report_html(kpi_weekly: pd.DataFrame, patterns_summary: pd.DataFrame, out_path: Path) -> None:
+    html = f"""
+    <html><head><meta charset="utf-8"><title>Fraud Monitoring Analysis Report</title></head>
+    <body style="font-family: Arial, sans-serif; margin: 24px;">
+      <h1>Fraud Monitoring – Analysis Report</h1>
+
+      <h2>Weekly KPI Summary</h2>
+      {kpi_weekly.to_html(index=False)}
+
+      <h2>Top Patterns (Top 10 each)</h2>
+      <p><b>pattern_type</b> indicates whether the pattern is coupon / pincode / device.</p>
+      {patterns_summary.to_html(index=False)}
+
+      <h2>Notes</h2>
+      <ul>
+        <li>Refund & RTO are treated as proxy outcomes for risk impact.</li>
+        <li>Risk score is explainable: reasons_1..3 are derived from weighted signals.</li>
+      </ul>
+    </body></html>
+    """
+    out_path.write_text(html, encoding="utf-8")
+    print(f"✅ Wrote: {out_path}")
+
+
+# =========================
+# Dashboard generation (Excel + images)
+# =========================
+def export_charts(kpi_weekly: pd.DataFrame, fact: pd.DataFrame) -> None:
+    # 1) Refund amount trend
+    if not kpi_weekly.empty and "week_start" in kpi_weekly.columns:
+        plt.figure()
+        plt.plot(kpi_weekly["week_start"], kpi_weekly["refund_amount"])
+        plt.xticks(rotation=45, ha="right")
+        plt.title("Weekly Refund Amount Trend")
+        plt.tight_layout()
+        path1 = EXPORTS_DIR / "weekly_refunds_trend.png"
+        plt.savefig(path1, dpi=160)
+        plt.close()
+        print(f"✅ Wrote: {path1}")
+
+    # 2) Risk band split
+    if "risk_band" in fact.columns:
+        band_counts = fact["risk_band"].value_counts(dropna=False)
+        plt.figure()
+        plt.pie(band_counts.values, labels=band_counts.index.astype(str), autopct="%1.1f%%")
+        plt.title("Risk Band Split (All Orders)")
+        plt.tight_layout()
+        path2 = EXPORTS_DIR / "risk_band_split.png"
+        plt.savefig(path2, dpi=160)
+        plt.close()
+        print(f"✅ Wrote: {path2}")
+
+
+def autosize_excel_columns(ws) -> None:
+    for col in ws.columns:
+        max_len = 0
+        col_letter = get_column_letter(col[0].column)
+        for cell in col:
+            v = "" if cell.value is None else str(cell.value)
+            max_len = max(max_len, len(v))
+        ws.column_dimensions[col_letter].width = min(45, max(10, max_len + 2))
+
+
+def export_dashboard_xlsx(
+    fact: pd.DataFrame,
+    weekly: pd.DataFrame,
+    queue: pd.DataFrame,
+    kpi_weekly: pd.DataFrame,
+    patterns_summary: pd.DataFrame
+) -> None:
+    xlsx_path = DASHBOARD_DIR / "dashboard.xlsx"
+
+    # Write sheets with pandas
+    with pd.ExcelWriter(xlsx_path, engine="openpyxl") as writer:
+        # Keep dashboards simple + useful
+        kpi_weekly.to_excel(writer, sheet_name="KPI_Weekly", index=False)
+        patterns_summary.to_excel(writer, sheet_name="Patterns", index=False)
+        queue.head(500).to_excel(writer, sheet_name="Investigation_Queue", index=False)  # keep file lighter
+        # Optional: store a smaller subset of fact for debugging
+        fact.head(2000).to_excel(writer, sheet_name="Sample_Fact", index=False)
+
+    # Post-format using openpyxl
+    wb = load_workbook(xlsx_path)
+
+    for sheet in wb.sheetnames:
+        ws = wb[sheet]
+        # header style
+        for cell in ws[1]:
+            cell.font = Font(bold=True)
+            cell.alignment = Alignment(horizontal="center")
+        autosize_excel_columns(ws)
+
+    wb.save(xlsx_path)
+    print(f"✅ Wrote: {xlsx_path}")
+
+
+# =========================
+# Final story: PDF memo
+# =========================
+def export_final_memo_pdf(
+    fact: pd.DataFrame,
+    kpi_weekly: pd.DataFrame,
+    patterns_summary: pd.DataFrame,
+    queue: pd.DataFrame,
+    out_path: Path
+) -> None:
+    from reportlab.lib.pagesizes import letter
+    from reportlab.pdfgen import canvas
+    from reportlab.lib.units import inch
+
+    # ---------- helpers ----------
+    def wrap_text(c: canvas.Canvas, text: str, font_name: str, font_size: int, max_width: float) -> List[str]:
+        """
+        Wraps text based on actual rendered width in ReportLab.
+        """
+        c.setFont(font_name, font_size)
+        words = (text or "").split()
+        if not words:
+            return [""]
+
+        lines = []
+        cur = words[0]
+        for w in words[1:]:
+            trial = cur + " " + w
+            if c.stringWidth(trial, font_name, font_size) <= max_width:
+                cur = trial
+            else:
+                lines.append(cur)
+                cur = w
+        lines.append(cur)
+        return lines
+
+    def ensure_space(c: canvas.Canvas, y: float, needed: float, page_w: float, page_h: float):
+        """
+        Starts a new page if not enough vertical space.
+        Returns updated y.
+        """
+        bottom_margin = 0.75 * inch
+        if y - needed < bottom_margin:
+            c.showPage()
+            return page_h - top_margin
+        return y
+
+    def draw_paragraph(c: canvas.Canvas, x: float, y: float, text: str,
+                       font_name: str = "Helvetica", font_size: int = 11,
+                       line_gap: int = 4) -> float:
+        """
+        Draw a wrapped paragraph and return new y.
+        """
+        max_width = page_w - left_margin - right_margin
+        lines = wrap_text(c, text, font_name, font_size, max_width)
+        line_height = font_size + line_gap
+
+        y = ensure_space(c, y, line_height * len(lines), page_w, page_h)
+
+        c.setFont(font_name, font_size)
+        for line in lines:
+            c.drawString(x, y, line)
+            y -= line_height
+        return y
+
+    def draw_bullets(c: canvas.Canvas, x: float, y: float, bullets: List[str],
+                     font_name: str = "Helvetica", font_size: int = 11,
+                     bullet_indent: float = 12, line_gap: int = 3) -> float:
+        """
+        Draw bullet list with wrapping.
+        """
+        max_width = page_w - left_margin - right_margin - bullet_indent
+        line_height = font_size + line_gap
+        c.setFont(font_name, font_size)
+
+        for b in bullets:
+            # Wrap bullet text and draw with bullet symbol only on first line
+            lines = wrap_text(c, b, font_name, font_size, max_width)
+            needed = line_height * max(1, len(lines))
+            y = ensure_space(c, y, needed + 6, page_w, page_h)
+
+            # First line: bullet
+            c.drawString(x, y, "•")
+            c.drawString(x + bullet_indent, y, lines[0])
+            y -= line_height
+
+            # Remaining lines: indent aligned with text
+            for line in lines[1:]:
+                c.drawString(x + bullet_indent, y, line)
+                y -= line_height
+
+        return y
+
+    # ---------- compute summary stats ----------
+    total_orders = len(fact)
+    total_refund = float(pd.to_numeric(fact.get("refund_amount", 0), errors="coerce").fillna(0).sum())
+    total_rto = int(pd.to_numeric(fact.get("rto_flag", 0), errors="coerce").fillna(0).sum())
+    high_risk = int((fact.get("risk_band", "") == "High").sum()) if "risk_band" in fact.columns else 0
+
+    top_queue = queue.head(5)[["order_id", "risk_score", "risk_band", "reason_1", "reason_2", "reason_3", "recommended_action"]] \
+        if not queue.empty else pd.DataFrame()
+
+    top_patterns = patterns_summary.head(5).to_dict("records") if not patterns_summary.empty else []
+
+    # ---------- PDF layout settings ----------
+    c = canvas.Canvas(str(out_path), pagesize=letter)
+    page_w, page_h = letter
+
+    left_margin = 0.75 * inch
+    right_margin = 0.75 * inch
+    top_margin = 0.75 * inch
+
+    x = left_margin
+    y = page_h - top_margin
+
+    # ---------- title ----------
+    y = draw_paragraph(c, x, y, "Final Memo — Fraud Monitoring & Investigation Dashboard",
+                       font_name="Helvetica-Bold", font_size=16, line_gap=6)
+    y -= 6
+    y = draw_paragraph(c, x, y, "Generated automatically from ETL outputs (data, analysis, dashboard, and queue).",
+                       font_name="Helvetica", font_size=10, line_gap=4)
+    y -= 10
+
+    # ---------- executive summary ----------
+    y = draw_paragraph(c, x, y, "Executive Summary", font_name="Helvetica-Bold", font_size=12, line_gap=5)
+    y -= 2
+    bullets = [
+        f"Total orders analyzed: {total_orders}",
+        f"Total refund amount (proxy loss): {total_refund:,.2f}",
+        f"Total RTO count (proxy risk): {total_rto}",
+        f"High-risk orders (risk_band=High): {high_risk}",
+        "Risk scoring is explainable (0–100) with top 3 reasons captured per order.",
+        "Investigation queue ranks suspicious orders and recommends an action (manual review / OTP / call verification)."
+    ]
+    y = draw_bullets(c, x, y, bullets, font_size=11)
+
+    y -= 10
+
+    # ---------- top patterns ----------
+    y = draw_paragraph(c, x, y, "Top Patterns (snapshot)", font_name="Helvetica-Bold", font_size=12, line_gap=5)
+    y -= 2
+
+    if not top_patterns:
+        y = draw_paragraph(c, x, y, "No patterns available (insufficient data).", font_size=11)
+    else:
+        pat_lines = []
+        for p in top_patterns:
+            ptype = p.get("pattern_type", "pattern")
+            # Keep it readable in memo: compact representation
+            pat_lines.append(f"[{ptype}] " + ", ".join([f"{k}={p[k]}" for k in list(p.keys())[:6] if k in p]))
+        y = draw_bullets(c, x, y, pat_lines, font_size=10)
+
+    y -= 10
+
+    # ---------- sample investigation queue ----------
+    y = draw_paragraph(c, x, y, "Sample Investigation Queue (Top 5)", font_name="Helvetica-Bold", font_size=12, line_gap=5)
+    y -= 2
+
+    if top_queue.empty:
+        y = draw_paragraph(c, x, y, "Queue not available (empty).", font_size=11)
+    else:
+        # Render as wrapped bullet-like lines (simple table in text)
+        q_bullets = []
+        for _, r in top_queue.iterrows():
+            q_bullets.append(
+                f"order_id={r['order_id']}, score={r['risk_score']}, band={r['risk_band']}, "
+                f"reasons=({r['reason_1']}, {r['reason_2']}, {r['reason_3']}), action={r['recommended_action']}"
+            )
+        y = draw_bullets(c, x, y, q_bullets, font_size=10)
+
+    y -= 10
+
+    # ---------- next actions ----------
+    y = draw_paragraph(c, x, y, "Next Actions (recommended)", font_name="Helvetica-Bold", font_size=12, line_gap=5)
+    y -= 2
+    actions = [
+        "Apply manual review / OTP friction for High-risk orders.",
+        "Limit coupon usage by device/pincode for repeated abuse patterns.",
+        "Track weekly KPIs (refund_amount, refund_rate, rto_rate, flagged orders) as guardrails after controls."
+    ]
+    y = draw_bullets(c, x, y, actions, font_size=11)
+
+    c.save()
+    print(f"✅ Wrote: {out_path}")
+
+# =========================
 # Validations
 # =========================
 def validate_fact(fact: pd.DataFrame) -> None:
     if "order_id" not in fact.columns:
         raise ValueError("fact_orders_enriched must have order_id")
-
     dup = fact["order_id"].duplicated().sum()
     if dup > 0:
         raise ValueError(f"Join explosion: {dup} duplicate order_id rows in fact_orders_enriched")
-
     if (fact["risk_score"] < 0).any() or (fact["risk_score"] > 100).any():
         raise ValueError("risk_score out of bounds 0..100")
 
@@ -617,22 +931,44 @@ def main():
         products=products,
     )
 
-    # scoring + reasons
     fact = compute_score_and_reasons(fact)
-
-    # weekly + queue
     weekly = build_user_weekly(fact)
     queue = build_queue(fact)
 
-    # validations
     validate_fact(fact)
 
-    # outputs
-    write_csv(fact, "fact_orders_enriched.csv")
-    write_csv(weekly, "fact_user_risk_weekly.csv")
-    write_csv(queue, "investigation_queue.csv")
+    # 1) Core ETL outputs
+    write_csv(fact, DATA_DIR / "fact_orders_enriched.csv")
+    write_csv(weekly, DATA_DIR / "fact_user_risk_weekly.csv")
+    write_csv(queue, DATA_DIR / "investigation_queue.csv")
 
-    print("\n🎉 Pipeline complete. Outputs are in /data (generated outputs only).")
+    # 2) Analysis outputs
+    artifacts = build_analysis_artifacts(fact, weekly, queue)
+    kpi_weekly = artifacts["kpi_weekly"]
+    patterns_summary = artifacts["patterns_summary"]
+
+    write_csv(kpi_weekly, ANALYSIS_DIR / "kpi_weekly.csv")
+    write_csv(patterns_summary, ANALYSIS_DIR / "patterns_summary.csv")
+    export_analysis_report_html(kpi_weekly, patterns_summary, ANALYSIS_DIR / "analysis_report.html")
+
+    # 3) Dashboard outputs
+    export_charts(kpi_weekly, fact)
+    export_dashboard_xlsx(fact, weekly, queue, kpi_weekly, patterns_summary)
+
+    # 4) Final story outputs
+    export_final_memo_pdf(
+        fact=fact,
+        kpi_weekly=kpi_weekly,
+        patterns_summary=patterns_summary,
+        queue=queue,
+        out_path=FINAL_STORY_DIR / "final_memo.pdf"
+    )
+
+    print("\n🎉 All done.")
+    print("Core CSVs in /data")
+    print("Analysis report in /analysis")
+    print("Dashboard in /dashboard")
+    print("Final memo in /final_story")
 
 
 if __name__ == "__main__":
