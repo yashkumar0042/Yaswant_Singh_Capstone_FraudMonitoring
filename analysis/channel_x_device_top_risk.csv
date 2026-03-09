@@ -1,0 +1,4 @@
+channel,device_id,orders,refund_loss,avg_risk,rto,coupon_orders,recommended_control
+search,D_RING_03,2,0.0,54.0,0.0,2,Throttle repeated device usage and require step-up verification.
+ORGANIC,D_RING_02,1,0.0,52.0,0.0,0,Throttle repeated device usage and require step-up verification.
+paid_social,D_RING_05,2,0.0,51.0,0.0,2,Throttle repeated device usage and require step-up verification.

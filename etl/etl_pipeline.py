@@ -221,20 +221,19 @@ def recommend_action(row: pd.Series) -> str:
 
     if band == "High":
         if ("DEVICE_REUSE" in reasons or "PINCODE_REUSE" in reasons) and ("NEW_USER_COUPON" in reasons or "NEW_USER" in reasons):
-            return "HOLD_FOR_MANUAL_REVIEW"
+            return "HOLD"
         if "PAYMENT_FAIL_SPIKE" in reasons:
             return "CALL_VERIFICATION"
         if "HIGH_RTO_PINCODE" in reasons and "COD_ORDER" in reasons:
-            return "OTP_ADDRESS_CONFIRMATION"
+            return "AUTO_CANCEL"
         return "MANUAL_REVIEW"
 
     if band == "Medium":
         if "HIGH_DISCOUNT" in reasons or "NEW_USER_COUPON" in reasons:
-            return "SOFT_FRICTION_OTP"
-        return "MONITOR"
+            return "CALL_VERIFICATION"
+        return "MANUAL_REVIEW"
 
     return "ALLOW"
-
 
 # =========================
 # Products flatten
@@ -515,6 +514,52 @@ def build_user_weekly(fact: pd.DataFrame) -> pd.DataFrame:
     out["risk_score_avg"] = out["risk_score_avg"].round(1)
     return out
 
+def evidence_for_reason(row: pd.Series, reason: str) -> str:
+    if reason == "HIGH_DISCOUNT":
+        return f"discount_pct={float(pd.to_numeric(row.get('discount_pct', 0), errors='coerce') or 0):.2f}"
+
+    if reason == "DISCOUNT_SEVERITY":
+        return f"discount_pct={float(pd.to_numeric(row.get('discount_pct', 0), errors='coerce') or 0):.2f}"
+
+    if reason == "COUPON_REPEAT_USER":
+        return f"coupon_orders_user={int(pd.to_numeric(row.get('coupon_orders_user', 0), errors='coerce') or 0)}"
+
+    if reason == "COUPON_DEVICE_REUSE":
+        return f"coupon_users_per_device={int(pd.to_numeric(row.get('coupon_users_per_device', 0), errors='coerce') or 0)}"
+
+    if reason == "PAYMENT_FAIL_SPIKE":
+        return f"failed_attempts={int(pd.to_numeric(row.get('failed_attempts', 0), errors='coerce') or 0)}"
+
+    if reason == "NEW_USER":
+        return f"days_since_signup={int(pd.to_numeric(row.get('days_since_signup', 9999), errors='coerce') or 9999)}"
+
+    if reason == "NEW_USER_COUPON":
+        days = int(pd.to_numeric(row.get("days_since_signup", 9999), errors="coerce") or 9999)
+        coupon = str(row.get("coupon_id", "none"))
+        return f"days_since_signup={days}; coupon_id={coupon}"
+
+    if reason == "COD_ORDER":
+        return f"payment_method={row.get('payment_method', 'unknown')}"
+
+    if reason == "HIGH_RTO_PINCODE":
+        rate = float(pd.to_numeric(row.get("pincode_rto_rate", 0), errors="coerce") or 0)
+        pin = str(row.get("shipping_pincode", "unknown"))
+        return f"shipping_pincode={pin}; pincode_rto_rate={rate:.2f}"
+
+    if reason == "PINCODE_REUSE":
+        return f"pincode_orders_count={int(pd.to_numeric(row.get('pincode_orders_count', 0), errors='coerce') or 0)}"
+
+    if reason == "DEVICE_REUSE":
+        return f"device_orders_count={int(pd.to_numeric(row.get('device_orders_count', 0), errors='coerce') or 0)}"
+
+    if reason == "VALUE_OUTLIER":
+        return f"net_amount_z={float(pd.to_numeric(row.get('net_amount_z', 0), errors='coerce') or 0):.2f}"
+
+    if reason == "REFUND_HISTORY":
+        return f"prior_refunds_count={int(pd.to_numeric(row.get('prior_refunds_count', 0), errors='coerce') or 0)}"
+
+    return ""
+
 
 def build_queue(fact: pd.DataFrame) -> pd.DataFrame:
     df = fact.copy()
@@ -524,6 +569,8 @@ def build_queue(fact: pd.DataFrame) -> pd.DataFrame:
         "discount_pct": 0,
         "failed_attempts": 0,
         "device_orders_count": 1,
+        "coupon_orders_user": 0,
+        "coupon_users_per_device": 0,
         "pincode_orders_count": 1,
         "days_since_signup": 9999,
         "prior_refunds_count": 0,
@@ -531,17 +578,25 @@ def build_queue(fact: pd.DataFrame) -> pd.DataFrame:
         "coupon_id": "none",
         "payment_method": "unknown",
         "net_amount": 0,
+        "net_amount_z": 0,
+        "pincode_rto_rate": 0,
         "order_ts": pd.NaT,
     }
     for c, d in defaults.items():
         if c not in df.columns:
             df[c] = d
 
+    df["evidence_1"] = df.apply(lambda r: evidence_for_reason(r, r.get("reason_1", "")), axis=1)
+    df["evidence_2"] = df.apply(lambda r: evidence_for_reason(r, r.get("reason_2", "")), axis=1)
+    df["evidence_3"] = df.apply(lambda r: evidence_for_reason(r, r.get("reason_3", "")), axis=1)
+
     queue = df[[
         "order_id", "user_id", "order_ts", "net_amount", "payment_method", "coupon_id",
         "shipping_pincode",
         "risk_score", "risk_band",
-        "reason_1", "reason_2", "reason_3",
+        "reason_1", "evidence_1",
+        "reason_2", "evidence_2",
+        "reason_3", "evidence_3",
         "recommended_action",
         "discount_pct", "failed_attempts", "device_orders_count", "pincode_orders_count",
         "days_since_signup", "prior_refunds_count",
@@ -550,7 +605,6 @@ def build_queue(fact: pd.DataFrame) -> pd.DataFrame:
     queue = queue.sort_values(["risk_score", "net_amount"], ascending=[False, False]).reset_index(drop=True)
     queue.insert(0, "rank", range(1, len(queue) + 1))
     return queue
-
 
 # =========================
 # Analysis artifacts
@@ -616,30 +670,650 @@ def build_analysis_artifacts(fact: pd.DataFrame, weekly: pd.DataFrame, queue: pd
     }
 
 
-def export_analysis_report_html(kpi_weekly: pd.DataFrame, patterns_summary: pd.DataFrame, out_path: Path) -> None:
+def export_analysis_report_html(
+    kpi_weekly: pd.DataFrame,
+    patterns_summary: pd.DataFrame,
+    out_path: Path,
+    weekly_diagnosis: pd.DataFrame | None = None,
+    named_patterns: pd.DataFrame | None = None,
+    investigation_table: pd.DataFrame | None = None,
+    segment_outputs: Dict[str, pd.DataFrame] | None = None,
+) -> None:
+    def safe_html(df: pd.DataFrame, max_rows: int | None = None) -> str:
+        if df is None or df.empty:
+            return "<p><i>No data available.</i></p>"
+        x = df.copy()
+        if max_rows:
+            x = x.head(max_rows)
+        return x.to_html(index=False, na_rep="", border=1)
+
+    # Split pattern tables cleanly
+    by_coupon = pd.DataFrame()
+    by_pincode = pd.DataFrame()
+    by_device = pd.DataFrame()
+
+    if patterns_summary is not None and not patterns_summary.empty and "pattern_type" in patterns_summary.columns:
+        by_coupon = patterns_summary[patterns_summary["pattern_type"] == "coupon"].copy()
+        by_pincode = patterns_summary[patterns_summary["pattern_type"] == "pincode"].copy()
+        by_device = patterns_summary[patterns_summary["pattern_type"] == "device"].copy()
+
+    # Executive commentary from current metrics
+    summary_points = []
+    if kpi_weekly is not None and not kpi_weekly.empty:
+        top_refund_week = kpi_weekly.sort_values("refund_amount", ascending=False).head(1)
+        if not top_refund_week.empty:
+            r = top_refund_week.iloc[0]
+            summary_points.append(
+                f"Highest weekly refund loss was in <b>{r['week_start']}</b> with "
+                f"<b>₹{float(r['refund_amount']):,.2f}</b> across <b>{int(r['refunds'])}</b> refunded orders."
+            )
+
+        avg_refund_rate = float(kpi_weekly["refund_rate"].mean()) if "refund_rate" in kpi_weekly.columns else 0
+        summary_points.append(
+            f"Average weekly refund rate across the period was <b>{avg_refund_rate * 100:.2f}%</b>."
+        )
+
+        if "rto" in kpi_weekly.columns and float(kpi_weekly["rto"].sum()) == 0:
+            summary_points.append(
+                "No RTO events were observed in the current sample, so RTO-based fraud controls cannot yet be validated from this dataset."
+            )
+
+        if "payment_failures" in kpi_weekly.columns and float(kpi_weekly["payment_failures"].sum()) == 0:
+            summary_points.append(
+                "No payment-failure spikes were observed in the weekly rollup, which suggests either low retry abuse in the sample or sparse payment event capture."
+            )
+
+    if not by_device.empty:
+        top_dev = by_device.sort_values("avg_risk", ascending=False).head(1)
+        if not top_dev.empty:
+            r = top_dev.iloc[0]
+            summary_points.append(
+                f"Most suspicious device cluster was <b>{r['device_id']}</b> with "
+                f"<b>{int(r['orders'])}</b> orders, <b>{int(r['users'])}</b> users, and average risk score "
+                f"<b>{float(r['avg_risk']):.2f}</b>."
+            )
+
+    if not by_coupon.empty:
+        top_coupon = by_coupon.sort_values("avg_risk", ascending=False).head(1)
+        if not top_coupon.empty:
+            r = top_coupon.iloc[0]
+            summary_points.append(
+                f"Highest-risk coupon pattern was <b>{r['coupon_id']}</b> with "
+                f"<b>{int(r['orders'])}</b> orders and average risk score <b>{float(r['avg_risk']):.2f}</b>."
+            )
+
+    if not by_pincode.empty:
+        top_pin = by_pincode.sort_values("refund_amount", ascending=False).head(1)
+        if not top_pin.empty:
+            r = top_pin.iloc[0]
+            summary_points.append(
+                f"Highest-loss pincode cluster was <b>{r['shipping_pincode']}</b> with "
+                f"loss proxy of <b>₹{float(r['refund_amount']):,.2f}</b> across <b>{int(r['orders'])}</b> orders."
+            )
+
+    # Segment deep dive section
+    segment_html = ""
+    if segment_outputs:
+        for name, df in segment_outputs.items():
+            pretty_name = name.replace("_", " ").title()
+            segment_html += f"<h3>{pretty_name}</h3>\n"
+            segment_html += safe_html(df, max_rows=10)
+
     html = f"""
-    <html><head><meta charset="utf-8"><title>Fraud Monitoring Analysis Report</title></head>
-    <body style="font-family: Arial, sans-serif; margin: 24px;">
-      <h1>Fraud Monitoring – Analysis Report</h1>
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <title>Fraud Monitoring Analysis Report</title>
+        <style>
+            body {{
+                font-family: Arial, sans-serif;
+                margin: 24px;
+                color: #222;
+            }}
+            h1 {{
+                color: #1f4e79;
+            }}
+            h2 {{
+                color: #2f5597;
+                margin-top: 28px;
+            }}
+            h3 {{
+                color: #444;
+                margin-top: 18px;
+            }}
+            table {{
+                border-collapse: collapse;
+                width: 100%;
+                margin-top: 10px;
+                margin-bottom: 20px;
+                font-size: 13px;
+            }}
+            th, td {{
+                border: 1px solid #ccc;
+                padding: 6px 8px;
+                text-align: left;
+                vertical-align: top;
+            }}
+            th {{
+                background-color: #f2f2f2;
+            }}
+            ul {{
+                margin-top: 8px;
+            }}
+            .summary-box {{
+                background: #f8fbff;
+                border: 1px solid #d6e6f5;
+                padding: 14px 16px;
+                margin-bottom: 20px;
+            }}
+            .note-box {{
+                background: #fafafa;
+                border-left: 4px solid #999;
+                padding: 10px 14px;
+                margin-top: 16px;
+            }}
+        </style>
+    </head>
+    <body>
+        <h1>Fraud Monitoring – Analysis Report</h1>
 
-      <h2>Weekly KPI Summary</h2>
-      {kpi_weekly.to_html(index=False)}
+        <div class="summary-box">
+            <h2 style="margin-top:0;">Executive Summary</h2>
+            <ul>
+                {''.join(f'<li>{pt}</li>' for pt in summary_points) if summary_points else '<li>No summary insights available.</li>'}
+            </ul>
+        </div>
 
-      <h2>Top Patterns (Top 10 each)</h2>
-      <p><b>pattern_type</b> indicates whether the pattern is coupon / pincode / device.</p>
-      {patterns_summary.to_html(index=False)}
+        <h2>1. Weekly KPI Summary</h2>
+        {safe_html(kpi_weekly)}
 
-      <h2>Notes</h2>
-      <ul>
-        <li>Refund & RTO are treated as proxy outcomes for risk impact.</li>
-        <li>Risk score is explainable: reasons_1..3 are derived from weighted signals.</li>
-      </ul>
-    </body></html>
+        <h2>2. Weekly Diagnosis / Spike Review</h2>
+        {safe_html(weekly_diagnosis)}
+
+        <h2>3. Top Coupon Patterns</h2>
+        {safe_html(by_coupon, max_rows=10)}
+
+        <h2>4. Top Pincode Patterns</h2>
+        {safe_html(by_pincode, max_rows=10)}
+
+        <h2>5. Top Device Patterns</h2>
+        {safe_html(by_device, max_rows=10)}
+
+        <h2>6. Named Fraud / Anomaly Patterns</h2>
+        {safe_html(named_patterns, max_rows=10)}
+
+        <h2>7. Segment Deep Dive</h2>
+        {segment_html if segment_html else "<p><i>No segment deep-dive outputs available.</i></p>"}
+
+        <h2>8. Investigation Table for Top 2 Patterns</h2>
+        {safe_html(investigation_table, max_rows=10)}
+
+        <h2>9. Notes & Limitations</h2>
+        <div class="note-box">
+            <ul>
+                <li>Refund amount is treated as a proxy for fraud loss; it is not a confirmed fraud label.</li>
+                <li>RTO and payment-failure trends are currently flat in this sample, so those patterns are weakly represented.</li>
+                <li>Risk score is explainable through reason_1, reason_2, and reason_3 derived from weighted signals.</li>
+                <li>Some segment views may show <i>unknown</i> if source fields such as channel or city tier are not available in raw data.</li>
+            </ul>
+        </div>
+    </body>
+    </html>
     """
     out_path.write_text(html, encoding="utf-8")
     print(f"✅ Wrote: {out_path}")
 
+def label_user_type(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    if "new_user_flag" in out.columns:
+        out["user_type"] = np.where(pd.to_numeric(out["new_user_flag"], errors="coerce").fillna(0) == 1, "new", "returning")
+    else:
+        out["user_type"] = "unknown"
+    return out
 
+
+def derive_city_tier(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    if "shipping_city_tier" not in out.columns:
+        out["shipping_city_tier"] = "unknown"
+    out["shipping_city_tier"] = out["shipping_city_tier"].astype("string").fillna("unknown")
+    return out
+
+
+def add_payment_group(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    pm = out.get("payment_method", pd.Series(["unknown"] * len(out), index=out.index)).astype("string").str.lower()
+    out["payment_group"] = np.where(pm.str.contains("cod", na=False), "COD", "Prepaid")
+    return out
+
+
+def build_weekly_diagnosis(fact: pd.DataFrame, kpi_weekly: pd.DataFrame) -> pd.DataFrame:
+    df = fact.copy()
+    wk = kpi_weekly.copy()
+
+    if wk.empty:
+        return pd.DataFrame(columns=[
+            "week_start", "refund_amount", "rto", "coupon_orders", "payment_failures",
+            "spike_metric", "spike_flag", "likely_causes"
+        ])
+
+    for col in ["refund_amount", "rto", "coupon_orders", "payment_failures"]:
+        if col not in wk.columns:
+            wk[col] = 0
+
+    for col in ["refund_amount", "rto", "coupon_orders", "payment_failures"]:
+        base = wk[col].rolling(window=3, min_periods=1).mean().shift(1)
+        ratio = np.where((base.fillna(0) > 0), wk[col] / base, 1.0)
+        wk[f"{col}_vs_prev3_ratio"] = np.round(ratio, 2)
+
+    def detect_spike(row):
+        candidates = {
+            "refund_amount": row.get("refund_amount_vs_prev3_ratio", 1.0),
+            "rto": row.get("rto_vs_prev3_ratio", 1.0),
+            "coupon_orders": row.get("coupon_orders_vs_prev3_ratio", 1.0),
+            "payment_failures": row.get("payment_failures_vs_prev3_ratio", 1.0),
+        }
+        metric = max(candidates, key=candidates.get)
+        spike = candidates[metric] >= 1.5
+        return pd.Series([metric, int(spike)])
+
+    wk[["spike_metric", "spike_flag"]] = wk.apply(detect_spike, axis=1)
+
+    causes = []
+    for _, row in wk.iterrows():
+        week = row["week_start"]
+        sub = df.copy()
+        if "order_ts" in sub.columns:
+            sub["week_start"] = week_start(sub["order_ts"]).astype("string")
+            sub = sub[sub["week_start"] == str(week)]
+
+        reason_cols = [c for c in ["reason_1", "reason_2", "reason_3"] if c in sub.columns]
+        if reason_cols and not sub.empty:
+            rs = pd.concat([sub[c].astype("string") for c in reason_cols], ignore_index=True)
+            rs = rs[rs.notna() & (rs != "")]
+            top_reason = rs.value_counts().index[0] if not rs.empty else "NO_CLEAR_REASON"
+        else:
+            top_reason = "NO_CLEAR_REASON"
+
+        causes.append(top_reason)
+
+    wk["likely_causes"] = causes
+    return wk[[
+        "week_start", "refund_amount", "rto", "coupon_orders", "payment_failures",
+        "spike_metric", "spike_flag", "likely_causes"
+    ]]
+
+def build_named_patterns(fact: pd.DataFrame) -> pd.DataFrame:
+    df = fact.copy()
+    df = label_user_type(df)
+    df = add_payment_group(df)
+    df = derive_city_tier(df)
+
+    for col in ["refund_amount", "risk_score", "discount_pct", "failed_attempts", "rto_flag"]:
+        if col not in df.columns:
+            df[col] = 0
+
+    patterns = []
+
+    # Pattern 1
+    p1 = df[
+        (df.get("coupon_used_flag", 0) == 1) &
+        (df.get("new_user_flag", 0) == 1)
+    ]
+    if not p1.empty:
+        g = p1.groupby(["coupon_id", "shipping_pincode"], as_index=False).agg(
+            orders=("order_id", "count"),
+            loss_proxy=("refund_amount", "sum"),
+            avg_risk=("risk_score", "mean"),
+        ).sort_values(["orders", "loss_proxy"], ascending=[False, False]).head(1)
+        if not g.empty:
+            r = g.iloc[0]
+            patterns.append({
+                "pattern_name": "coupon used by many new users from same pincode",
+                "pattern_definition": f"coupon_id={r['coupon_id']} with new-user concentration in pincode={r['shipping_pincode']}",
+                "orders": int(r["orders"]),
+                "loss_proxy": float(r["loss_proxy"]),
+                "segment": "new users + pincode cluster",
+                "segment_value": str(r["shipping_pincode"]),
+                "avg_risk": float(r["avg_risk"]),
+            })
+
+    # Pattern 2
+    p2 = df[df.get("failed_attempts", 0) >= 2]
+    if not p2.empty:
+        g = p2.groupby(["payment_method"], as_index=False).agg(
+            orders=("order_id", "count"),
+            loss_proxy=("refund_amount", "sum"),
+            avg_risk=("risk_score", "mean"),
+        ).sort_values(["orders", "avg_risk"], ascending=[False, False]).head(1)
+        if not g.empty:
+            r = g.iloc[0]
+            patterns.append({
+                "pattern_name": "many payment failures before order completion",
+                "pattern_definition": f"orders with failed_attempts>=2 concentrated in payment_method={r['payment_method']}",
+                "orders": int(r["orders"]),
+                "loss_proxy": float(r["loss_proxy"]),
+                "segment": "payment method",
+                "segment_value": str(r["payment_method"]),
+                "avg_risk": float(r["avg_risk"]),
+            })
+
+    # Pattern 3
+    p3 = df[(df.get("payment_group", "") == "COD") & (df.get("rto_flag", 0) == 1)]
+    if not p3.empty:
+        g = p3.groupby(["shipping_pincode"], as_index=False).agg(
+            orders=("order_id", "count"),
+            loss_proxy=("refund_amount", "sum"),
+            avg_risk=("risk_score", "mean"),
+        ).sort_values(["orders", "avg_risk"], ascending=[False, False]).head(1)
+        if not g.empty:
+            r = g.iloc[0]
+            patterns.append({
+                "pattern_name": "COD orders from specific region with high RTO",
+                "pattern_definition": f"COD RTO concentration in pincode={r['shipping_pincode']}",
+                "orders": int(r["orders"]),
+                "loss_proxy": float(r["loss_proxy"]),
+                "segment": "pincode",
+                "segment_value": str(r["shipping_pincode"]),
+                "avg_risk": float(r["avg_risk"]),
+            })
+
+    # Pattern 4
+    if "device_id" in df.columns:
+        p4 = df[df.get("device_orders_count", 0) >= 3]
+        if not p4.empty:
+            g = p4.groupby(["device_id"], as_index=False).agg(
+                orders=("order_id", "count"),
+                users=("user_id", "nunique"),
+                loss_proxy=("refund_amount", "sum"),
+                avg_risk=("risk_score", "mean"),
+            ).sort_values(["users", "avg_risk"], ascending=[False, False]).head(1)
+            if not g.empty:
+                r = g.iloc[0]
+                patterns.append({
+                    "pattern_name": "same device reused across multiple suspicious orders",
+                    "pattern_definition": f"device_id={r['device_id']} reused across {int(r['users'])} users",
+                    "orders": int(r["orders"]),
+                    "loss_proxy": float(r["loss_proxy"]),
+                    "segment": "device",
+                    "segment_value": str(r["device_id"]),
+                    "avg_risk": float(r["avg_risk"]),
+                })
+
+    # Pattern 5
+    p5 = df[df.get("high_discount_flag", 0) == 1]
+    if not p5.empty:
+        g = p5.groupby(["top_category"], as_index=False).agg(
+            orders=("order_id", "count"),
+            loss_proxy=("refund_amount", "sum"),
+            avg_discount=("discount_pct", "mean"),
+            avg_risk=("risk_score", "mean"),
+        ).sort_values(["loss_proxy", "orders"], ascending=[False, False]).head(1)
+        if not g.empty:
+            r = g.iloc[0]
+            patterns.append({
+                "pattern_name": "high-discount concentration in category",
+                "pattern_definition": f"discount-heavy suspicious orders concentrated in category={r['top_category']}",
+                "orders": int(r["orders"]),
+                "loss_proxy": float(r["loss_proxy"]),
+                "segment": "category",
+                "segment_value": str(r["top_category"]),
+                "avg_risk": float(r["avg_risk"]),
+            })
+
+    return pd.DataFrame(patterns)
+
+def build_named_patterns(fact: pd.DataFrame) -> pd.DataFrame:
+    df = fact.copy()
+    df = label_user_type(df)
+    df = add_payment_group(df)
+    df = derive_city_tier(df)
+
+    for col in ["refund_amount", "risk_score", "discount_pct", "failed_attempts", "rto_flag"]:
+        if col not in df.columns:
+            df[col] = 0
+
+    patterns = []
+
+    # Pattern 1
+    p1 = df[
+        (df.get("coupon_used_flag", 0) == 1) &
+        (df.get("new_user_flag", 0) == 1)
+    ]
+    if not p1.empty:
+        g = p1.groupby(["coupon_id", "shipping_pincode"], as_index=False).agg(
+            orders=("order_id", "count"),
+            loss_proxy=("refund_amount", "sum"),
+            avg_risk=("risk_score", "mean"),
+        ).sort_values(["orders", "loss_proxy"], ascending=[False, False]).head(1)
+        if not g.empty:
+            r = g.iloc[0]
+            patterns.append({
+                "pattern_name": "coupon used by many new users from same pincode",
+                "pattern_definition": f"coupon_id={r['coupon_id']} with new-user concentration in pincode={r['shipping_pincode']}",
+                "orders": int(r["orders"]),
+                "loss_proxy": float(r["loss_proxy"]),
+                "segment": "new users + pincode cluster",
+                "segment_value": str(r["shipping_pincode"]),
+                "avg_risk": float(r["avg_risk"]),
+            })
+
+    # Pattern 2
+    p2 = df[df.get("failed_attempts", 0) >= 2]
+    if not p2.empty:
+        g = p2.groupby(["payment_method"], as_index=False).agg(
+            orders=("order_id", "count"),
+            loss_proxy=("refund_amount", "sum"),
+            avg_risk=("risk_score", "mean"),
+        ).sort_values(["orders", "avg_risk"], ascending=[False, False]).head(1)
+        if not g.empty:
+            r = g.iloc[0]
+            patterns.append({
+                "pattern_name": "many payment failures before order completion",
+                "pattern_definition": f"orders with failed_attempts>=2 concentrated in payment_method={r['payment_method']}",
+                "orders": int(r["orders"]),
+                "loss_proxy": float(r["loss_proxy"]),
+                "segment": "payment method",
+                "segment_value": str(r["payment_method"]),
+                "avg_risk": float(r["avg_risk"]),
+            })
+
+    # Pattern 3
+    p3 = df[(df.get("payment_group", "") == "COD") & (df.get("rto_flag", 0) == 1)]
+    if not p3.empty:
+        g = p3.groupby(["shipping_pincode"], as_index=False).agg(
+            orders=("order_id", "count"),
+            loss_proxy=("refund_amount", "sum"),
+            avg_risk=("risk_score", "mean"),
+        ).sort_values(["orders", "avg_risk"], ascending=[False, False]).head(1)
+        if not g.empty:
+            r = g.iloc[0]
+            patterns.append({
+                "pattern_name": "COD orders from specific region with high RTO",
+                "pattern_definition": f"COD RTO concentration in pincode={r['shipping_pincode']}",
+                "orders": int(r["orders"]),
+                "loss_proxy": float(r["loss_proxy"]),
+                "segment": "pincode",
+                "segment_value": str(r["shipping_pincode"]),
+                "avg_risk": float(r["avg_risk"]),
+            })
+
+    # Pattern 4
+    if "device_id" in df.columns:
+        p4 = df[df.get("device_orders_count", 0) >= 3]
+        if not p4.empty:
+            g = p4.groupby(["device_id"], as_index=False).agg(
+                orders=("order_id", "count"),
+                users=("user_id", "nunique"),
+                loss_proxy=("refund_amount", "sum"),
+                avg_risk=("risk_score", "mean"),
+            ).sort_values(["users", "avg_risk"], ascending=[False, False]).head(1)
+            if not g.empty:
+                r = g.iloc[0]
+                patterns.append({
+                    "pattern_name": "same device reused across multiple suspicious orders",
+                    "pattern_definition": f"device_id={r['device_id']} reused across {int(r['users'])} users",
+                    "orders": int(r["orders"]),
+                    "loss_proxy": float(r["loss_proxy"]),
+                    "segment": "device",
+                    "segment_value": str(r["device_id"]),
+                    "avg_risk": float(r["avg_risk"]),
+                })
+
+    # Pattern 5
+    p5 = df[df.get("high_discount_flag", 0) == 1]
+    if not p5.empty:
+        g = p5.groupby(["top_category"], as_index=False).agg(
+            orders=("order_id", "count"),
+            loss_proxy=("refund_amount", "sum"),
+            avg_discount=("discount_pct", "mean"),
+            avg_risk=("risk_score", "mean"),
+        ).sort_values(["loss_proxy", "orders"], ascending=[False, False]).head(1)
+        if not g.empty:
+            r = g.iloc[0]
+            patterns.append({
+                "pattern_name": "high-discount concentration in category",
+                "pattern_definition": f"discount-heavy suspicious orders concentrated in category={r['top_category']}",
+                "orders": int(r["orders"]),
+                "loss_proxy": float(r["loss_proxy"]),
+                "segment": "category",
+                "segment_value": str(r["top_category"]),
+                "avg_risk": float(r["avg_risk"]),
+            })
+
+    return pd.DataFrame(patterns)
+
+def top_n_segment_stats(df: pd.DataFrame, group_cols: List[str], n: int = 3) -> tuple[pd.DataFrame, pd.DataFrame]:
+    work = df.copy()
+    for c in group_cols:
+        if c not in work.columns:
+            work[c] = "unknown"
+
+    agg = work.groupby(group_cols, as_index=False).agg(
+        orders=("order_id", "count"),
+        refund_loss=("refund_amount", "sum"),
+        avg_risk=("risk_score", "mean"),
+        rto=("rto_flag", "sum"),
+        coupon_orders=("coupon_used_flag", "sum"),
+    )
+
+    top_loss = agg.sort_values(["refund_loss", "orders"], ascending=[False, False]).head(n).copy()
+    top_risk = agg.sort_values(["avg_risk", "orders"], ascending=[False, False]).head(n).copy()
+    return top_loss, top_risk
+
+
+def recommend_control_for_segment(row: pd.Series, segment_name: str) -> str:
+    seg = str(row.to_dict())
+    if "COD" in seg or "rto" in segment_name.lower():
+        return "Add COD address confirmation / OTP before shipment."
+    if "new" in seg and "coupon" in seg:
+        return "Apply coupon throttling and verification for new users."
+    if "device" in segment_name.lower():
+        return "Throttle repeated device usage and require step-up verification."
+    if "payment" in segment_name.lower():
+        return "Add payment retry controls / call verification."
+    return "Route segment to targeted monitoring and manual review."
+
+
+def build_segment_deep_dive(fact: pd.DataFrame) -> Dict[str, pd.DataFrame]:
+    df = fact.copy()
+    df = label_user_type(df)
+    df = add_payment_group(df)
+    df = derive_city_tier(df)
+
+    if "channel" not in df.columns:
+        df["channel"] = "unknown"
+    if "device_id" not in df.columns:
+        df["device_id"] = "unknown"
+
+    outputs = {}
+
+    analyses = {
+        "channel_x_device": ["channel", "device_id"],
+        "new_vs_returning": ["user_type"],
+        "city_tier_clusters": ["shipping_city_tier", "shipping_pincode"],
+        "payment_method_group": ["payment_group"],
+        "top_categories": ["top_category"],
+    }
+
+    for name, cols in analyses.items():
+        top_loss, top_risk = top_n_segment_stats(df, cols, n=3)
+        if not top_loss.empty:
+            top_loss["recommended_control"] = top_loss.apply(lambda r: recommend_control_for_segment(r, name), axis=1)
+        if not top_risk.empty:
+            top_risk["recommended_control"] = top_risk.apply(lambda r: recommend_control_for_segment(r, name), axis=1)
+
+        outputs[f"{name}_top_loss"] = top_loss
+        outputs[f"{name}_top_risk"] = top_risk
+
+    return outputs
+
+def build_investigation_table(fact: pd.DataFrame, named_patterns: pd.DataFrame) -> pd.DataFrame:
+    if named_patterns.empty:
+        return pd.DataFrame(columns=[
+            "pattern_name", "pattern_definition", "volume_orders", "loss_proxy",
+            "concentration", "hypothesis_1", "hypothesis_2", "hypothesis_3",
+            "validation_needed", "evidence_used"
+        ])
+
+    top2 = named_patterns.sort_values(["loss_proxy", "orders"], ascending=[False, False]).head(2).copy()
+
+    rows = []
+    for _, r in top2.iterrows():
+        pattern = str(r["pattern_name"])
+        definition = str(r["pattern_definition"])
+        orders = int(r["orders"])
+        loss = float(r["loss_proxy"])
+        concentration = f"{r['segment']}={r['segment_value']}"
+
+        if "coupon" in pattern.lower():
+            h1 = "Promo code leaked to abuse networks or public forums."
+            h2 = "New-user onboarding loophole enables repeated incentive capture."
+            h3 = "Weak device / pincode throttling allows repeated redemption."
+            validation = "Check coupon redemption history by device, pincode, and signup cohort; compare before/after restriction."
+            evidence = "patterns_summary, top_coupons_avg_risk chart, investigation_queue"
+        elif "payment failures" in pattern.lower():
+            h1 = "Card testing or bot-driven retry behavior before a successful transaction."
+            h2 = "Fraudsters probe authorization rules with low-value attempts."
+            h3 = "Gateway retry logic may allow suspicious retries without escalation."
+            validation = "Inspect payment event sequence and session-level retry patterns before successful orders."
+            evidence = "kpi_weekly payment_failures, investigation_queue failed_attempts"
+        else:
+            h1 = "Regional or operational weaknesses create a repeatable fraud opportunity."
+            h2 = "Certain user/device cohorts are exploiting known control gaps."
+            h3 = "Model thresholds may not yet block this suspicious segment early enough."
+            validation = "Drill into the segment over 2–4 weeks and compare treated vs untreated cohorts."
+            evidence = "weekly diagnosis, named patterns, segment deep dive tables"
+
+        rows.append({
+            "pattern_name": pattern,
+            "pattern_definition": definition,
+            "volume_orders": orders,
+            "loss_proxy": round(loss, 2),
+            "concentration": concentration,
+            "hypothesis_1": h1,
+            "hypothesis_2": h2,
+            "hypothesis_3": h3,
+            "validation_needed": validation,
+            "evidence_used": evidence,
+        })
+
+    return pd.DataFrame(rows)
+
+
+def build_part_c_outputs(fact: pd.DataFrame, kpi_weekly: pd.DataFrame) -> Dict[str, pd.DataFrame]:
+    weekly_diagnosis = build_weekly_diagnosis(fact, kpi_weekly)
+    named_patterns = build_named_patterns(fact)
+    segment_outputs = build_segment_deep_dive(fact)
+    investigation_table = build_investigation_table(fact, named_patterns)
+
+    outputs = {
+        "weekly_diagnosis": weekly_diagnosis,
+        "named_patterns": named_patterns,
+        "investigation_table_top2_patterns": investigation_table,
+    }
+    outputs.update(segment_outputs)
+    return outputs
 # =========================
 # Dashboard generation (Excel + images)
 # =========================
@@ -1385,7 +2059,23 @@ def main():
     write_csv(kpi_weekly, ANALYSIS_DIR / "kpi_weekly.csv")
     write_csv(patterns_summary, ANALYSIS_DIR / "patterns_summary.csv")
     export_analysis_report_html(kpi_weekly, patterns_summary, ANALYSIS_DIR / "analysis_report.html")
+    # 2b) Part C analytics outputs
+    part_c = build_part_c_outputs(fact, kpi_weekly)
 
+    for name, df_out in part_c.items():
+        write_csv(df_out, ANALYSIS_DIR / f"{name}.csv")
+
+        segment_outputs = {k: v for k, v in part_c.items() if "top_loss" in k or "top_risk" in k}
+
+        export_analysis_report_html(
+        kpi_weekly=kpi_weekly,
+        patterns_summary=patterns_summary,
+        out_path=ANALYSIS_DIR / "analysis_report.html",
+        weekly_diagnosis=part_c.get("weekly_diagnosis"),
+        named_patterns=part_c.get("named_patterns"),
+        investigation_table=part_c.get("investigation_table_top2_patterns"),
+        segment_outputs=segment_outputs,
+    )
     # 3) Dashboard outputs
     export_charts(kpi_weekly, fact)
     export_dashboard_xlsx(fact, weekly, queue, kpi_weekly, patterns_summary)

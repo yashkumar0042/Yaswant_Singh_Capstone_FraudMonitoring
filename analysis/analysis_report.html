@@ -1,10 +1,70 @@
 
-    <html><head><meta charset="utf-8"><title>Fraud Monitoring Analysis Report</title></head>
-    <body style="font-family: Arial, sans-serif; margin: 24px;">
-      <h1>Fraud Monitoring – Analysis Report</h1>
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <title>Fraud Monitoring Analysis Report</title>
+        <style>
+            body {
+                font-family: Arial, sans-serif;
+                margin: 24px;
+                color: #222;
+            }
+            h1 {
+                color: #1f4e79;
+            }
+            h2 {
+                color: #2f5597;
+                margin-top: 28px;
+            }
+            h3 {
+                color: #444;
+                margin-top: 18px;
+            }
+            table {
+                border-collapse: collapse;
+                width: 100%;
+                margin-top: 10px;
+                margin-bottom: 20px;
+                font-size: 13px;
+            }
+            th, td {
+                border: 1px solid #ccc;
+                padding: 6px 8px;
+                text-align: left;
+                vertical-align: top;
+            }
+            th {
+                background-color: #f2f2f2;
+            }
+            ul {
+                margin-top: 8px;
+            }
+            .summary-box {
+                background: #f8fbff;
+                border: 1px solid #d6e6f5;
+                padding: 14px 16px;
+                margin-bottom: 20px;
+            }
+            .note-box {
+                background: #fafafa;
+                border-left: 4px solid #999;
+                padding: 10px 14px;
+                margin-top: 16px;
+            }
+        </style>
+    </head>
+    <body>
+        <h1>Fraud Monitoring – Analysis Report</h1>
 
-      <h2>Weekly KPI Summary</h2>
-      <table border="1" class="dataframe">
+        <div class="summary-box">
+            <h2 style="margin-top:0;">Executive Summary</h2>
+            <ul>
+                <li>Highest weekly refund loss was in <b>2025-08-18</b> with <b>₹114,651.00</b> across <b>17</b> refunded orders.</li><li>Average weekly refund rate across the period was <b>7.42%</b>.</li><li>No RTO events were observed in the current sample, so RTO-based fraud controls cannot yet be validated from this dataset.</li><li>No payment-failure spikes were observed in the weekly rollup, which suggests either low retry abuse in the sample or sparse payment event capture.</li><li>Most suspicious device cluster was <b>D_RING_02</b> with <b>27</b> orders, <b>12</b> users, and average risk score <b>45.33</b>.</li><li>Highest-risk coupon pattern was <b>cpn009</b> with <b>8</b> orders and average risk score <b>24.12</b>.</li><li>Highest-loss pincode cluster was <b>568518.0</b> with loss proxy of <b>₹89,943.51</b> across <b>164</b> orders.</li>
+            </ul>
+        </div>
+
+        <h2>1. Weekly KPI Summary</h2>
+        <table border="1" class="dataframe">
   <thead>
     <tr style="text-align: right;">
       <th>week_start</th>
@@ -375,9 +435,296 @@
   </tbody>
 </table>
 
-      <h2>Top Patterns (Top 10 each)</h2>
-      <p><b>pattern_type</b> indicates whether the pattern is coupon / pincode / device.</p>
-      <table border="1" class="dataframe">
+        <h2>2. Weekly Diagnosis / Spike Review</h2>
+        <table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>week_start</th>
+      <th>refund_amount</th>
+      <th>rto</th>
+      <th>coupon_orders</th>
+      <th>payment_failures</th>
+      <th>spike_metric</th>
+      <th>spike_flag</th>
+      <th>likely_causes</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>2025-07-28</td>
+      <td>1332.85</td>
+      <td>0.0</td>
+      <td>3</td>
+      <td>0</td>
+      <td>refund_amount</td>
+      <td>0</td>
+      <td>PINCODE_REUSE</td>
+    </tr>
+    <tr>
+      <td>2025-08-04</td>
+      <td>22991.76</td>
+      <td>0.0</td>
+      <td>34</td>
+      <td>0</td>
+      <td>refund_amount</td>
+      <td>1</td>
+      <td>PINCODE_REUSE</td>
+    </tr>
+    <tr>
+      <td>2025-08-11</td>
+      <td>43673.84</td>
+      <td>0.0</td>
+      <td>36</td>
+      <td>0</td>
+      <td>refund_amount</td>
+      <td>1</td>
+      <td>PINCODE_REUSE</td>
+    </tr>
+    <tr>
+      <td>2025-08-18</td>
+      <td>114651.00</td>
+      <td>0.0</td>
+      <td>24</td>
+      <td>0</td>
+      <td>refund_amount</td>
+      <td>1</td>
+      <td>PINCODE_REUSE</td>
+    </tr>
+    <tr>
+      <td>2025-08-25</td>
+      <td>78893.73</td>
+      <td>0.0</td>
+      <td>26</td>
+      <td>0</td>
+      <td>refund_amount</td>
+      <td>0</td>
+      <td>PINCODE_REUSE</td>
+    </tr>
+    <tr>
+      <td>2025-09-01</td>
+      <td>52573.62</td>
+      <td>0.0</td>
+      <td>34</td>
+      <td>0</td>
+      <td>coupon_orders</td>
+      <td>0</td>
+      <td>PINCODE_REUSE</td>
+    </tr>
+    <tr>
+      <td>2025-09-08</td>
+      <td>42151.69</td>
+      <td>0.0</td>
+      <td>34</td>
+      <td>0</td>
+      <td>coupon_orders</td>
+      <td>0</td>
+      <td>PINCODE_REUSE</td>
+    </tr>
+    <tr>
+      <td>2025-09-15</td>
+      <td>44380.34</td>
+      <td>0.0</td>
+      <td>33</td>
+      <td>0</td>
+      <td>coupon_orders</td>
+      <td>0</td>
+      <td>PINCODE_REUSE</td>
+    </tr>
+    <tr>
+      <td>2025-09-22</td>
+      <td>60702.74</td>
+      <td>0.0</td>
+      <td>38</td>
+      <td>0</td>
+      <td>refund_amount</td>
+      <td>0</td>
+      <td>PINCODE_REUSE</td>
+    </tr>
+    <tr>
+      <td>2025-09-29</td>
+      <td>97203.58</td>
+      <td>0.0</td>
+      <td>36</td>
+      <td>0</td>
+      <td>refund_amount</td>
+      <td>1</td>
+      <td>PINCODE_REUSE</td>
+    </tr>
+    <tr>
+      <td>2025-10-06</td>
+      <td>47879.45</td>
+      <td>0.0</td>
+      <td>35</td>
+      <td>0</td>
+      <td>rto</td>
+      <td>0</td>
+      <td>PINCODE_REUSE</td>
+    </tr>
+    <tr>
+      <td>2025-10-13</td>
+      <td>69403.90</td>
+      <td>0.0</td>
+      <td>33</td>
+      <td>0</td>
+      <td>refund_amount</td>
+      <td>0</td>
+      <td>PINCODE_REUSE</td>
+    </tr>
+    <tr>
+      <td>2025-10-20</td>
+      <td>32695.60</td>
+      <td>0.0</td>
+      <td>32</td>
+      <td>0</td>
+      <td>rto</td>
+      <td>0</td>
+      <td>PINCODE_REUSE</td>
+    </tr>
+    <tr>
+      <td>2025-10-27</td>
+      <td>49305.79</td>
+      <td>0.0</td>
+      <td>24</td>
+      <td>0</td>
+      <td>rto</td>
+      <td>0</td>
+      <td>PINCODE_REUSE</td>
+    </tr>
+    <tr>
+      <td>2025-11-03</td>
+      <td>70463.48</td>
+      <td>0.0</td>
+      <td>37</td>
+      <td>0</td>
+      <td>refund_amount</td>
+      <td>0</td>
+      <td>PINCODE_REUSE</td>
+    </tr>
+    <tr>
+      <td>2025-11-10</td>
+      <td>56692.63</td>
+      <td>0.0</td>
+      <td>28</td>
+      <td>0</td>
+      <td>refund_amount</td>
+      <td>0</td>
+      <td>PINCODE_REUSE</td>
+    </tr>
+    <tr>
+      <td>2025-11-17</td>
+      <td>42218.53</td>
+      <td>0.0</td>
+      <td>32</td>
+      <td>0</td>
+      <td>coupon_orders</td>
+      <td>0</td>
+      <td>PINCODE_REUSE</td>
+    </tr>
+    <tr>
+      <td>2025-11-24</td>
+      <td>97159.10</td>
+      <td>0.0</td>
+      <td>20</td>
+      <td>0</td>
+      <td>refund_amount</td>
+      <td>1</td>
+      <td>PINCODE_REUSE</td>
+    </tr>
+    <tr>
+      <td>2025-12-01</td>
+      <td>62659.84</td>
+      <td>0.0</td>
+      <td>32</td>
+      <td>0</td>
+      <td>coupon_orders</td>
+      <td>0</td>
+      <td>PINCODE_REUSE</td>
+    </tr>
+    <tr>
+      <td>2025-12-08</td>
+      <td>48241.42</td>
+      <td>0.0</td>
+      <td>31</td>
+      <td>0</td>
+      <td>coupon_orders</td>
+      <td>0</td>
+      <td>PINCODE_REUSE</td>
+    </tr>
+    <tr>
+      <td>2025-12-15</td>
+      <td>51257.75</td>
+      <td>0.0</td>
+      <td>23</td>
+      <td>0</td>
+      <td>rto</td>
+      <td>0</td>
+      <td>PINCODE_REUSE</td>
+    </tr>
+    <tr>
+      <td>2025-12-22</td>
+      <td>59284.19</td>
+      <td>0.0</td>
+      <td>38</td>
+      <td>0</td>
+      <td>coupon_orders</td>
+      <td>0</td>
+      <td>PINCODE_REUSE</td>
+    </tr>
+    <tr>
+      <td>2025-12-29</td>
+      <td>25156.16</td>
+      <td>0.0</td>
+      <td>31</td>
+      <td>0</td>
+      <td>coupon_orders</td>
+      <td>0</td>
+      <td>PINCODE_REUSE</td>
+    </tr>
+    <tr>
+      <td>2026-01-05</td>
+      <td>53953.10</td>
+      <td>0.0</td>
+      <td>25</td>
+      <td>0</td>
+      <td>refund_amount</td>
+      <td>0</td>
+      <td>PINCODE_REUSE</td>
+    </tr>
+    <tr>
+      <td>2026-01-12</td>
+      <td>94951.72</td>
+      <td>0.0</td>
+      <td>28</td>
+      <td>0</td>
+      <td>refund_amount</td>
+      <td>1</td>
+      <td>PINCODE_REUSE</td>
+    </tr>
+    <tr>
+      <td>2026-01-19</td>
+      <td>88935.57</td>
+      <td>0.0</td>
+      <td>35</td>
+      <td>0</td>
+      <td>refund_amount</td>
+      <td>1</td>
+      <td>PINCODE_REUSE</td>
+    </tr>
+    <tr>
+      <td>2026-01-26</td>
+      <td>71181.61</td>
+      <td>0.0</td>
+      <td>20</td>
+      <td>0</td>
+      <td>rto</td>
+      <td>0</td>
+      <td>PINCODE_REUSE</td>
+    </tr>
+  </tbody>
+</table>
+
+        <h2>3. Top Coupon Patterns</h2>
+        <table border="1" class="dataframe">
   <thead>
     <tr style="text-align: right;">
       <th>coupon_id</th>
@@ -403,9 +750,9 @@
       <td>5.733232</td>
       <td>coupon</td>
       <td>&lt;NA&gt;</td>
-      <td>NaN</td>
+      <td></td>
       <td>&lt;NA&gt;</td>
-      <td>NaN</td>
+      <td></td>
     </tr>
     <tr>
       <td>welcome20</td>
@@ -416,9 +763,9 @@
       <td>8.928933</td>
       <td>coupon</td>
       <td>&lt;NA&gt;</td>
-      <td>NaN</td>
+      <td></td>
       <td>&lt;NA&gt;</td>
-      <td>NaN</td>
+      <td></td>
     </tr>
     <tr>
       <td>flash40</td>
@@ -429,9 +776,9 @@
       <td>9.519595</td>
       <td>coupon</td>
       <td>&lt;NA&gt;</td>
-      <td>NaN</td>
+      <td></td>
       <td>&lt;NA&gt;</td>
-      <td>NaN</td>
+      <td></td>
     </tr>
     <tr>
       <td>fashion30</td>
@@ -442,9 +789,9 @@
       <td>11.677857</td>
       <td>coupon</td>
       <td>&lt;NA&gt;</td>
-      <td>NaN</td>
+      <td></td>
       <td>&lt;NA&gt;</td>
-      <td>NaN</td>
+      <td></td>
     </tr>
     <tr>
       <td>cpn012</td>
@@ -455,9 +802,9 @@
       <td>5.791142</td>
       <td>coupon</td>
       <td>&lt;NA&gt;</td>
-      <td>NaN</td>
+      <td></td>
       <td>&lt;NA&gt;</td>
-      <td>NaN</td>
+      <td></td>
     </tr>
     <tr>
       <td>beauty25</td>
@@ -468,9 +815,9 @@
       <td>13.374578</td>
       <td>coupon</td>
       <td>&lt;NA&gt;</td>
-      <td>NaN</td>
+      <td></td>
       <td>&lt;NA&gt;</td>
-      <td>NaN</td>
+      <td></td>
     </tr>
     <tr>
       <td>cpn013</td>
@@ -481,9 +828,9 @@
       <td>7.384359</td>
       <td>coupon</td>
       <td>&lt;NA&gt;</td>
-      <td>NaN</td>
+      <td></td>
       <td>&lt;NA&gt;</td>
-      <td>NaN</td>
+      <td></td>
     </tr>
     <tr>
       <td>flat150</td>
@@ -494,9 +841,9 @@
       <td>3.392672</td>
       <td>coupon</td>
       <td>&lt;NA&gt;</td>
-      <td>NaN</td>
+      <td></td>
       <td>&lt;NA&gt;</td>
-      <td>NaN</td>
+      <td></td>
     </tr>
     <tr>
       <td>cpn010</td>
@@ -507,9 +854,9 @@
       <td>11.147380</td>
       <td>coupon</td>
       <td>&lt;NA&gt;</td>
-      <td>NaN</td>
+      <td></td>
       <td>&lt;NA&gt;</td>
-      <td>NaN</td>
+      <td></td>
     </tr>
     <tr>
       <td>shipfree</td>
@@ -520,22 +867,43 @@
       <td>3.956663</td>
       <td>coupon</td>
       <td>&lt;NA&gt;</td>
-      <td>NaN</td>
+      <td></td>
       <td>&lt;NA&gt;</td>
-      <td>NaN</td>
+      <td></td>
     </tr>
+  </tbody>
+</table>
+
+        <h2>4. Top Pincode Patterns</h2>
+        <table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>coupon_id</th>
+      <th>orders</th>
+      <th>refund_amount</th>
+      <th>rto</th>
+      <th>avg_risk</th>
+      <th>avg_discount</th>
+      <th>pattern_type</th>
+      <th>shipping_pincode</th>
+      <th>rto_rate</th>
+      <th>device_id</th>
+      <th>users</th>
+    </tr>
+  </thead>
+  <tbody>
     <tr>
       <td>&lt;NA&gt;</td>
       <td>168</td>
       <td>76344.48</td>
       <td>0.0</td>
       <td>21.190476</td>
-      <td>NaN</td>
+      <td></td>
       <td>pincode</td>
       <td>563967.0</td>
       <td>0.0</td>
       <td>&lt;NA&gt;</td>
-      <td>NaN</td>
+      <td></td>
     </tr>
     <tr>
       <td>&lt;NA&gt;</td>
@@ -543,12 +911,12 @@
       <td>23295.88</td>
       <td>0.0</td>
       <td>20.820000</td>
-      <td>NaN</td>
+      <td></td>
       <td>pincode</td>
       <td>574573.0</td>
       <td>0.0</td>
       <td>&lt;NA&gt;</td>
-      <td>NaN</td>
+      <td></td>
     </tr>
     <tr>
       <td>&lt;NA&gt;</td>
@@ -556,12 +924,12 @@
       <td>89943.51</td>
       <td>0.0</td>
       <td>20.024390</td>
-      <td>NaN</td>
+      <td></td>
       <td>pincode</td>
       <td>568518.0</td>
       <td>0.0</td>
       <td>&lt;NA&gt;</td>
-      <td>NaN</td>
+      <td></td>
     </tr>
     <tr>
       <td>&lt;NA&gt;</td>
@@ -569,12 +937,12 @@
       <td>15891.87</td>
       <td>0.0</td>
       <td>19.233333</td>
-      <td>NaN</td>
+      <td></td>
       <td>pincode</td>
       <td>565285.0</td>
       <td>0.0</td>
       <td>&lt;NA&gt;</td>
-      <td>NaN</td>
+      <td></td>
     </tr>
     <tr>
       <td>&lt;NA&gt;</td>
@@ -582,12 +950,12 @@
       <td>8533.54</td>
       <td>0.0</td>
       <td>18.760870</td>
-      <td>NaN</td>
+      <td></td>
       <td>pincode</td>
       <td>575588.0</td>
       <td>0.0</td>
       <td>&lt;NA&gt;</td>
-      <td>NaN</td>
+      <td></td>
     </tr>
     <tr>
       <td>&lt;NA&gt;</td>
@@ -595,12 +963,12 @@
       <td>19328.35</td>
       <td>0.0</td>
       <td>18.365079</td>
-      <td>NaN</td>
+      <td></td>
       <td>pincode</td>
       <td>575139.0</td>
       <td>0.0</td>
       <td>&lt;NA&gt;</td>
-      <td>NaN</td>
+      <td></td>
     </tr>
     <tr>
       <td>&lt;NA&gt;</td>
@@ -608,12 +976,12 @@
       <td>48943.01</td>
       <td>0.0</td>
       <td>18.242424</td>
-      <td>NaN</td>
+      <td></td>
       <td>pincode</td>
       <td>571647.0</td>
       <td>0.0</td>
       <td>&lt;NA&gt;</td>
-      <td>NaN</td>
+      <td></td>
     </tr>
     <tr>
       <td>&lt;NA&gt;</td>
@@ -621,12 +989,12 @@
       <td>0.00</td>
       <td>0.0</td>
       <td>18.055556</td>
-      <td>NaN</td>
+      <td></td>
       <td>pincode</td>
       <td>574621.0</td>
       <td>0.0</td>
       <td>&lt;NA&gt;</td>
-      <td>NaN</td>
+      <td></td>
     </tr>
     <tr>
       <td>&lt;NA&gt;</td>
@@ -634,12 +1002,12 @@
       <td>63137.93</td>
       <td>0.0</td>
       <td>18.043478</td>
-      <td>NaN</td>
+      <td></td>
       <td>pincode</td>
       <td>569539.0</td>
       <td>0.0</td>
       <td>&lt;NA&gt;</td>
-      <td>NaN</td>
+      <td></td>
     </tr>
     <tr>
       <td>&lt;NA&gt;</td>
@@ -647,23 +1015,44 @@
       <td>45942.48</td>
       <td>0.0</td>
       <td>18.000000</td>
-      <td>NaN</td>
+      <td></td>
       <td>pincode</td>
       <td>565894.0</td>
       <td>0.0</td>
       <td>&lt;NA&gt;</td>
-      <td>NaN</td>
+      <td></td>
     </tr>
+  </tbody>
+</table>
+
+        <h2>5. Top Device Patterns</h2>
+        <table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>coupon_id</th>
+      <th>orders</th>
+      <th>refund_amount</th>
+      <th>rto</th>
+      <th>avg_risk</th>
+      <th>avg_discount</th>
+      <th>pattern_type</th>
+      <th>shipping_pincode</th>
+      <th>rto_rate</th>
+      <th>device_id</th>
+      <th>users</th>
+    </tr>
+  </thead>
+  <tbody>
     <tr>
       <td>&lt;NA&gt;</td>
       <td>27</td>
       <td>29520.42</td>
-      <td>NaN</td>
+      <td></td>
       <td>45.333333</td>
-      <td>NaN</td>
+      <td></td>
       <td>device</td>
       <td>&lt;NA&gt;</td>
-      <td>NaN</td>
+      <td></td>
       <td>D_RING_02</td>
       <td>12.0</td>
     </tr>
@@ -671,12 +1060,12 @@
       <td>&lt;NA&gt;</td>
       <td>19</td>
       <td>502.63</td>
-      <td>NaN</td>
+      <td></td>
       <td>43.526316</td>
-      <td>NaN</td>
+      <td></td>
       <td>device</td>
       <td>&lt;NA&gt;</td>
-      <td>NaN</td>
+      <td></td>
       <td>D_RING_01</td>
       <td>10.0</td>
     </tr>
@@ -684,12 +1073,12 @@
       <td>&lt;NA&gt;</td>
       <td>14</td>
       <td>5821.56</td>
-      <td>NaN</td>
+      <td></td>
       <td>41.571429</td>
-      <td>NaN</td>
+      <td></td>
       <td>device</td>
       <td>&lt;NA&gt;</td>
-      <td>NaN</td>
+      <td></td>
       <td>D_RING_05</td>
       <td>8.0</td>
     </tr>
@@ -697,12 +1086,12 @@
       <td>&lt;NA&gt;</td>
       <td>15</td>
       <td>8257.08</td>
-      <td>NaN</td>
+      <td></td>
       <td>41.200000</td>
-      <td>NaN</td>
+      <td></td>
       <td>device</td>
       <td>&lt;NA&gt;</td>
-      <td>NaN</td>
+      <td></td>
       <td>D_RING_03</td>
       <td>8.0</td>
     </tr>
@@ -710,12 +1099,12 @@
       <td>&lt;NA&gt;</td>
       <td>13</td>
       <td>0.00</td>
-      <td>NaN</td>
+      <td></td>
       <td>37.769231</td>
-      <td>NaN</td>
+      <td></td>
       <td>device</td>
       <td>&lt;NA&gt;</td>
-      <td>NaN</td>
+      <td></td>
       <td>D_RING_04</td>
       <td>6.0</td>
     </tr>
@@ -723,12 +1112,12 @@
       <td>&lt;NA&gt;</td>
       <td>5</td>
       <td>12497.95</td>
-      <td>NaN</td>
+      <td></td>
       <td>40.000000</td>
-      <td>NaN</td>
+      <td></td>
       <td>device</td>
       <td>&lt;NA&gt;</td>
-      <td>NaN</td>
+      <td></td>
       <td>Dcc4a3c5bc6</td>
       <td>1.0</td>
     </tr>
@@ -736,12 +1125,12 @@
       <td>&lt;NA&gt;</td>
       <td>5</td>
       <td>0.00</td>
-      <td>NaN</td>
+      <td></td>
       <td>34.400000</td>
-      <td>NaN</td>
+      <td></td>
       <td>device</td>
       <td>&lt;NA&gt;</td>
-      <td>NaN</td>
+      <td></td>
       <td>D6abcf7bcfc</td>
       <td>1.0</td>
     </tr>
@@ -749,12 +1138,12 @@
       <td>&lt;NA&gt;</td>
       <td>9</td>
       <td>0.00</td>
-      <td>NaN</td>
+      <td></td>
       <td>32.888889</td>
-      <td>NaN</td>
+      <td></td>
       <td>device</td>
       <td>&lt;NA&gt;</td>
-      <td>NaN</td>
+      <td></td>
       <td>Dcdedcabb6f</td>
       <td>1.0</td>
     </tr>
@@ -762,12 +1151,12 @@
       <td>&lt;NA&gt;</td>
       <td>7</td>
       <td>0.00</td>
-      <td>NaN</td>
+      <td></td>
       <td>32.428571</td>
-      <td>NaN</td>
+      <td></td>
       <td>device</td>
       <td>&lt;NA&gt;</td>
-      <td>NaN</td>
+      <td></td>
       <td>D0691d343f4</td>
       <td>1.0</td>
     </tr>
@@ -775,22 +1164,470 @@
       <td>&lt;NA&gt;</td>
       <td>8</td>
       <td>0.00</td>
-      <td>NaN</td>
+      <td></td>
       <td>32.250000</td>
-      <td>NaN</td>
+      <td></td>
       <td>device</td>
       <td>&lt;NA&gt;</td>
-      <td>NaN</td>
+      <td></td>
       <td>Dae68b18bd9</td>
       <td>1.0</td>
     </tr>
   </tbody>
 </table>
 
-      <h2>Notes</h2>
-      <ul>
-        <li>Refund & RTO are treated as proxy outcomes for risk impact.</li>
-        <li>Risk score is explainable: reasons_1..3 are derived from weighted signals.</li>
-      </ul>
-    </body></html>
+        <h2>6. Named Fraud / Anomaly Patterns</h2>
+        <table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>pattern_name</th>
+      <th>pattern_definition</th>
+      <th>orders</th>
+      <th>loss_proxy</th>
+      <th>segment</th>
+      <th>segment_value</th>
+      <th>avg_risk</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>same device reused across multiple suspicious orders</td>
+      <td>device_id=D_RING_02 reused across 12 users</td>
+      <td>27</td>
+      <td>29520.42</td>
+      <td>device</td>
+      <td>D_RING_02</td>
+      <td>45.333333</td>
+    </tr>
+  </tbody>
+</table>
+
+        <h2>7. Segment Deep Dive</h2>
+        <h3>Channel X Device Top Loss</h3>
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>channel</th>
+      <th>device_id</th>
+      <th>orders</th>
+      <th>refund_loss</th>
+      <th>avg_risk</th>
+      <th>rto</th>
+      <th>coupon_orders</th>
+      <th>recommended_control</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>organic</td>
+      <td>D44d20fd8c0</td>
+      <td>1</td>
+      <td>37905.55</td>
+      <td>22.0</td>
+      <td>0.0</td>
+      <td>0</td>
+      <td>Throttle repeated device usage and require step-up verification.</td>
+    </tr>
+    <tr>
+      <td>organic</td>
+      <td>D5a3f86d2cc</td>
+      <td>1</td>
+      <td>36701.14</td>
+      <td>13.0</td>
+      <td>0.0</td>
+      <td>0</td>
+      <td>Throttle repeated device usage and require step-up verification.</td>
+    </tr>
+    <tr>
+      <td>email</td>
+      <td>D3e6f4799a6</td>
+      <td>1</td>
+      <td>35157.63</td>
+      <td>14.0</td>
+      <td>0.0</td>
+      <td>0</td>
+      <td>Throttle repeated device usage and require step-up verification.</td>
+    </tr>
+  </tbody>
+</table><h3>Channel X Device Top Risk</h3>
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>channel</th>
+      <th>device_id</th>
+      <th>orders</th>
+      <th>refund_loss</th>
+      <th>avg_risk</th>
+      <th>rto</th>
+      <th>coupon_orders</th>
+      <th>recommended_control</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>search</td>
+      <td>D_RING_03</td>
+      <td>2</td>
+      <td>0.0</td>
+      <td>54.0</td>
+      <td>0.0</td>
+      <td>2</td>
+      <td>Throttle repeated device usage and require step-up verification.</td>
+    </tr>
+    <tr>
+      <td>ORGANIC</td>
+      <td>D_RING_02</td>
+      <td>1</td>
+      <td>0.0</td>
+      <td>52.0</td>
+      <td>0.0</td>
+      <td>0</td>
+      <td>Throttle repeated device usage and require step-up verification.</td>
+    </tr>
+    <tr>
+      <td>paid_social</td>
+      <td>D_RING_05</td>
+      <td>2</td>
+      <td>0.0</td>
+      <td>51.0</td>
+      <td>0.0</td>
+      <td>2</td>
+      <td>Throttle repeated device usage and require step-up verification.</td>
+    </tr>
+  </tbody>
+</table><h3>New Vs Returning Top Loss</h3>
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>user_type</th>
+      <th>orders</th>
+      <th>refund_loss</th>
+      <th>avg_risk</th>
+      <th>rto</th>
+      <th>coupon_orders</th>
+      <th>recommended_control</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>returning</td>
+      <td>4626</td>
+      <td>1801420.37</td>
+      <td>14.912668</td>
+      <td>0.0</td>
+      <td>924</td>
+      <td>Route segment to targeted monitoring and manual review.</td>
+    </tr>
+  </tbody>
+</table><h3>New Vs Returning Top Risk</h3>
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>user_type</th>
+      <th>orders</th>
+      <th>refund_loss</th>
+      <th>avg_risk</th>
+      <th>rto</th>
+      <th>coupon_orders</th>
+      <th>recommended_control</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>returning</td>
+      <td>4626</td>
+      <td>1801420.37</td>
+      <td>14.912668</td>
+      <td>0.0</td>
+      <td>924</td>
+      <td>Route segment to targeted monitoring and manual review.</td>
+    </tr>
+  </tbody>
+</table><h3>City Tier Clusters Top Loss</h3>
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>shipping_city_tier</th>
+      <th>shipping_pincode</th>
+      <th>orders</th>
+      <th>refund_loss</th>
+      <th>avg_risk</th>
+      <th>rto</th>
+      <th>coupon_orders</th>
+      <th>recommended_control</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>unknown</td>
+      <td>568518.0</td>
+      <td>164</td>
+      <td>89943.51</td>
+      <td>20.024390</td>
+      <td>0.0</td>
+      <td>44</td>
+      <td>Route segment to targeted monitoring and manual review.</td>
+    </tr>
+    <tr>
+      <td>unknown</td>
+      <td>577742.0</td>
+      <td>59</td>
+      <td>78095.35</td>
+      <td>16.694915</td>
+      <td>0.0</td>
+      <td>18</td>
+      <td>Route segment to targeted monitoring and manual review.</td>
+    </tr>
+    <tr>
+      <td>unknown</td>
+      <td>563967.0</td>
+      <td>168</td>
+      <td>76344.48</td>
+      <td>21.190476</td>
+      <td>0.0</td>
+      <td>35</td>
+      <td>Route segment to targeted monitoring and manual review.</td>
+    </tr>
+  </tbody>
+</table><h3>City Tier Clusters Top Risk</h3>
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>shipping_city_tier</th>
+      <th>shipping_pincode</th>
+      <th>orders</th>
+      <th>refund_loss</th>
+      <th>avg_risk</th>
+      <th>rto</th>
+      <th>coupon_orders</th>
+      <th>recommended_control</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>unknown</td>
+      <td>563967.0</td>
+      <td>168</td>
+      <td>76344.48</td>
+      <td>21.190476</td>
+      <td>0.0</td>
+      <td>35</td>
+      <td>Route segment to targeted monitoring and manual review.</td>
+    </tr>
+    <tr>
+      <td>unknown</td>
+      <td>574573.0</td>
+      <td>50</td>
+      <td>23295.88</td>
+      <td>20.820000</td>
+      <td>0.0</td>
+      <td>13</td>
+      <td>Route segment to targeted monitoring and manual review.</td>
+    </tr>
+    <tr>
+      <td>unknown</td>
+      <td>568518.0</td>
+      <td>164</td>
+      <td>89943.51</td>
+      <td>20.024390</td>
+      <td>0.0</td>
+      <td>44</td>
+      <td>Route segment to targeted monitoring and manual review.</td>
+    </tr>
+  </tbody>
+</table><h3>Payment Method Group Top Loss</h3>
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>payment_group</th>
+      <th>orders</th>
+      <th>refund_loss</th>
+      <th>avg_risk</th>
+      <th>rto</th>
+      <th>coupon_orders</th>
+      <th>recommended_control</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Prepaid</td>
+      <td>3330</td>
+      <td>1801420.37</td>
+      <td>13.032432</td>
+      <td>0.0</td>
+      <td>659</td>
+      <td>Add payment retry controls / call verification.</td>
+    </tr>
+    <tr>
+      <td>COD</td>
+      <td>1296</td>
+      <td>0.00</td>
+      <td>19.743827</td>
+      <td>0.0</td>
+      <td>265</td>
+      <td>Add COD address confirmation / OTP before shipment.</td>
+    </tr>
+  </tbody>
+</table><h3>Payment Method Group Top Risk</h3>
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>payment_group</th>
+      <th>orders</th>
+      <th>refund_loss</th>
+      <th>avg_risk</th>
+      <th>rto</th>
+      <th>coupon_orders</th>
+      <th>recommended_control</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>COD</td>
+      <td>1296</td>
+      <td>0.00</td>
+      <td>19.743827</td>
+      <td>0.0</td>
+      <td>265</td>
+      <td>Add COD address confirmation / OTP before shipment.</td>
+    </tr>
+    <tr>
+      <td>Prepaid</td>
+      <td>3330</td>
+      <td>1801420.37</td>
+      <td>13.032432</td>
+      <td>0.0</td>
+      <td>659</td>
+      <td>Add payment retry controls / call verification.</td>
+    </tr>
+  </tbody>
+</table><h3>Top Categories Top Loss</h3>
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>top_category</th>
+      <th>orders</th>
+      <th>refund_loss</th>
+      <th>avg_risk</th>
+      <th>rto</th>
+      <th>coupon_orders</th>
+      <th>recommended_control</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>electronics</td>
+      <td>846</td>
+      <td>665063.83</td>
+      <td>14.303783</td>
+      <td>0.0</td>
+      <td>192</td>
+      <td>Route segment to targeted monitoring and manual review.</td>
+    </tr>
+    <tr>
+      <td>beauty</td>
+      <td>1040</td>
+      <td>507853.12</td>
+      <td>15.056731</td>
+      <td>0.0</td>
+      <td>215</td>
+      <td>Route segment to targeted monitoring and manual review.</td>
+    </tr>
+    <tr>
+      <td>fashion</td>
+      <td>743</td>
+      <td>251851.38</td>
+      <td>14.975774</td>
+      <td>0.0</td>
+      <td>161</td>
+      <td>Route segment to targeted monitoring and manual review.</td>
+    </tr>
+  </tbody>
+</table><h3>Top Categories Top Risk</h3>
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>top_category</th>
+      <th>orders</th>
+      <th>refund_loss</th>
+      <th>avg_risk</th>
+      <th>rto</th>
+      <th>coupon_orders</th>
+      <th>recommended_control</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>books</td>
+      <td>651</td>
+      <td>128668.32</td>
+      <td>15.324117</td>
+      <td>0.0</td>
+      <td>121</td>
+      <td>Route segment to targeted monitoring and manual review.</td>
+    </tr>
+    <tr>
+      <td>home</td>
+      <td>636</td>
+      <td>151040.09</td>
+      <td>15.213836</td>
+      <td>0.0</td>
+      <td>117</td>
+      <td>Route segment to targeted monitoring and manual review.</td>
+    </tr>
+    <tr>
+      <td>beauty</td>
+      <td>1040</td>
+      <td>507853.12</td>
+      <td>15.056731</td>
+      <td>0.0</td>
+      <td>215</td>
+      <td>Route segment to targeted monitoring and manual review.</td>
+    </tr>
+  </tbody>
+</table>
+
+        <h2>8. Investigation Table for Top 2 Patterns</h2>
+        <table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>pattern_name</th>
+      <th>pattern_definition</th>
+      <th>volume_orders</th>
+      <th>loss_proxy</th>
+      <th>concentration</th>
+      <th>hypothesis_1</th>
+      <th>hypothesis_2</th>
+      <th>hypothesis_3</th>
+      <th>validation_needed</th>
+      <th>evidence_used</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>same device reused across multiple suspicious orders</td>
+      <td>device_id=D_RING_02 reused across 12 users</td>
+      <td>27</td>
+      <td>29520.42</td>
+      <td>device=D_RING_02</td>
+      <td>Regional or operational weaknesses create a repeatable fraud opportunity.</td>
+      <td>Certain user/device cohorts are exploiting known control gaps.</td>
+      <td>Model thresholds may not yet block this suspicious segment early enough.</td>
+      <td>Drill into the segment over 2–4 weeks and compare treated vs untreated cohorts.</td>
+      <td>weekly diagnosis, named patterns, segment deep dive tables</td>
+    </tr>
+  </tbody>
+</table>
+
+        <h2>9. Notes & Limitations</h2>
+        <div class="note-box">
+            <ul>
+                <li>Refund amount is treated as a proxy for fraud loss; it is not a confirmed fraud label.</li>
+                <li>RTO and payment-failure trends are currently flat in this sample, so those patterns are weakly represented.</li>
+                <li>Risk score is explainable through reason_1, reason_2, and reason_3 derived from weighted signals.</li>
+                <li>Some segment views may show <i>unknown</i> if source fields such as channel or city tier are not available in raw data.</li>
+            </ul>
+        </div>
+    </body>
+    </html>
     

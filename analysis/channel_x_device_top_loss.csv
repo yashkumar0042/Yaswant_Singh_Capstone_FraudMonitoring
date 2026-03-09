@@ -1,0 +1,4 @@
+channel,device_id,orders,refund_loss,avg_risk,rto,coupon_orders,recommended_control
+organic,D44d20fd8c0,1,37905.55,22.0,0.0,0,Throttle repeated device usage and require step-up verification.
+organic,D5a3f86d2cc,1,36701.14,13.0,0.0,0,Throttle repeated device usage and require step-up verification.
+email,D3e6f4799a6,1,35157.63,14.0,0.0,0,Throttle repeated device usage and require step-up verification.

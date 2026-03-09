@@ -1,0 +1,4 @@
+shipping_city_tier,shipping_pincode,orders,refund_loss,avg_risk,rto,coupon_orders,recommended_control
+unknown,568518.0,164,89943.51000000001,20.024390243902438,0.0,44,Route segment to targeted monitoring and manual review.
+unknown,577742.0,59,78095.35,16.694915254237287,0.0,18,Route segment to targeted monitoring and manual review.
+unknown,563967.0,168,76344.48,21.19047619047619,0.0,35,Route segment to targeted monitoring and manual review.

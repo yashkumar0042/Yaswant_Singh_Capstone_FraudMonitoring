@@ -1,0 +1,3 @@
+payment_group,orders,refund_loss,avg_risk,rto,coupon_orders,recommended_control
+Prepaid,3330,1801420.37,13.032432432432433,0.0,659,Add payment retry controls / call verification.
+COD,1296,0.0,19.743827160493826,0.0,265,Add COD address confirmation / OTP before shipment.

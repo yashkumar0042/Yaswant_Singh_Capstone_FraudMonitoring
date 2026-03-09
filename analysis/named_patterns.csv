@@ -1,0 +1,2 @@
+pattern_name,pattern_definition,orders,loss_proxy,segment,segment_value,avg_risk
+same device reused across multiple suspicious orders,device_id=D_RING_02 reused across 12 users,27,29520.420000000002,device,D_RING_02,45.333333333333336
