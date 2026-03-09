@@ -1518,12 +1518,129 @@ def build_dashboard_views(fact: pd.DataFrame, queue: pd.DataFrame, kpi_weekly: p
         "experiment_plan": experiment_plan,
     }
 
+def build_impact_estimation_30d(fact: pd.DataFrame, queue: pd.DataFrame) -> Dict[str, pd.DataFrame]:
+    df = fact.copy()
+    q = queue.copy()
+
+    for col in ["refund_amount", "rto_flag", "risk_band", "recommended_action"]:
+        if col not in df.columns:
+            df[col] = 0
+        if col not in q.columns:
+            q[col] = 0
+
+    # -----------------------------
+    # Current monthly loss proxy
+    # -----------------------------
+    # Refund loss is directly available
+    total_refund_loss = float(pd.to_numeric(df.get("refund_amount", 0), errors="coerce").fillna(0).sum())
+
+    # RTO proxy:
+    # if you do not have shipment cost, use a simple proxy from net_amount
+    # assumption: RTO proxy cost = 15% of net_amount for RTO orders
+    if "net_amount" not in df.columns:
+        df["net_amount"] = 0
+
+    rto_loss_proxy = float(
+        (
+            pd.to_numeric(df["net_amount"], errors="coerce").fillna(0)
+            * pd.to_numeric(df.get("rto_flag", 0), errors="coerce").fillna(0)
+            * 0.15
+        ).sum()
+    )
+
+    current_monthly_loss = total_refund_loss + rto_loss_proxy
+
+    # -----------------------------
+    # Queue-based preventable loss pool
+    # -----------------------------
+    # Assume high + medium risk queue are the action pool
+    if "risk_band" not in q.columns:
+        q["risk_band"] = "Low"
+
+    actionable_q = q[q["risk_band"].astype("string").isin(["High", "Medium"])].copy()
+
+    # Join refund/RTO proxy from fact if needed
+    enrich_cols = ["order_id", "refund_amount", "rto_flag", "net_amount"]
+    enrich_cols = [c for c in enrich_cols if c in df.columns]
+
+    if "order_id" in actionable_q.columns and "order_id" in df.columns:
+        actionable_q = actionable_q.merge(
+            df[enrich_cols].drop_duplicates("order_id"),
+            on="order_id",
+            how="left",
+            suffixes=("", "_fact")
+        )
+
+    actionable_q["refund_amount"] = pd.to_numeric(actionable_q.get("refund_amount", 0), errors="coerce").fillna(0)
+    actionable_q["rto_flag"] = pd.to_numeric(actionable_q.get("rto_flag", 0), errors="coerce").fillna(0)
+    actionable_q["net_amount"] = pd.to_numeric(actionable_q.get("net_amount", 0), errors="coerce").fillna(0)
+
+    actionable_q["loss_proxy"] = actionable_q["refund_amount"] + (actionable_q["rto_flag"] * actionable_q["net_amount"] * 0.15)
+
+    preventable_loss_pool = float(actionable_q["loss_proxy"].sum())
+
+    # -----------------------------
+    # Base / Best / Worst scenarios
+    # -----------------------------
+    # Interpretation:
+    # worst = only 20% of actionable loss prevented
+    # base  = 40%
+    # best  = 60%
+    scenarios = pd.DataFrame([
+        ["Worst", 0.20, round(preventable_loss_pool * 0.20, 2)],
+        ["Base",  0.40, round(preventable_loss_pool * 0.40, 2)],
+        ["Best",  0.60, round(preventable_loss_pool * 0.60, 2)],
+    ], columns=["scenario", "capture_rate", "expected_loss_prevented"])
+
+    # -----------------------------
+    # Operational cost trade-off
+    # -----------------------------
+    manual_review_count = 0
+    if "recommended_action" in q.columns:
+        manual_review_count = int(
+            q["recommended_action"].astype("string").isin(["MANUAL_REVIEW", "HOLD", "HOLD_FOR_MANUAL_REVIEW"]).sum()
+        )
+
+    call_verification_count = int(
+        q["recommended_action"].astype("string").isin(["CALL_VERIFICATION"]).sum()
+    ) if "recommended_action" in q.columns else 0
+
+    auto_cancel_count = int(
+        q["recommended_action"].astype("string").isin(["AUTO_CANCEL"]).sum()
+    ) if "recommended_action" in q.columns else 0
+
+    operational_tradeoff = pd.DataFrame([
+        ["Manual reviews required", manual_review_count],
+        ["Call verifications required", call_verification_count],
+        ["Auto-cancels expected", auto_cancel_count],
+    ], columns=["metric", "value"])
+
+    # -----------------------------
+    # Summary table
+    # -----------------------------
+    impact_summary_30d = pd.DataFrame([
+        ["Current Monthly Refund Loss", round(total_refund_loss, 2)],
+        ["Current Monthly RTO Loss Proxy", round(rto_loss_proxy, 2)],
+        ["Current Monthly Total Loss Proxy", round(current_monthly_loss, 2)],
+        ["Actionable Orders (Med+High)", int(len(actionable_q))],
+        ["Preventable Loss Pool", round(preventable_loss_pool, 2)],
+        ["Expected Manual Reviews", manual_review_count],
+    ], columns=["metric", "value"])
+
+    return {
+        "impact_summary_30d": impact_summary_30d,
+        "impact_scenarios_30d": scenarios,
+        "operational_tradeoff_30d": operational_tradeoff,
+    }
+
+
 def export_dashboard_xlsx(
     fact: pd.DataFrame,
     weekly: pd.DataFrame,
     queue: pd.DataFrame,
     kpi_weekly: pd.DataFrame,
-    patterns_summary: pd.DataFrame
+    patterns_summary: pd.DataFrame,
+    impact_outputs: Dict[str, pd.DataFrame] | None = None
 ) -> None:
     xlsx_path = DASHBOARD_DIR / "dashboard.xlsx"
 
@@ -1548,6 +1665,15 @@ def export_dashboard_xlsx(
         # View 4
         dashboard_views["controls_impact"].to_excel(writer, sheet_name="Controls_Impact", index=False)
         dashboard_views["experiment_plan"].to_excel(writer, sheet_name="Experiment_Plan", index=False)
+
+        # View 4 / Impact
+        dashboard_views["controls_impact"].to_excel(writer, sheet_name="Controls_Impact", index=False)
+        dashboard_views["experiment_plan"].to_excel(writer, sheet_name="Experiment_Plan", index=False)
+
+        if impact_outputs:
+            impact_outputs["impact_summary_30d"].to_excel(writer, sheet_name="Impact_Summary_30D", index=False)
+            impact_outputs["impact_scenarios_30d"].to_excel(writer, sheet_name="Impact_Scenarios_30D", index=False)
+            impact_outputs["operational_tradeoff_30d"].to_excel(writer, sheet_name="Operational_Tradeoff_30D", index=False)
 
         # Optional debug sheet
         fact.head(2000).to_excel(writer, sheet_name="Sample_Fact", index=False)
@@ -2067,7 +2193,7 @@ def main():
 
         segment_outputs = {k: v for k, v in part_c.items() if "top_loss" in k or "top_risk" in k}
 
-        export_analysis_report_html(
+    export_analysis_report_html(
         kpi_weekly=kpi_weekly,
         patterns_summary=patterns_summary,
         out_path=ANALYSIS_DIR / "analysis_report.html",
@@ -2076,9 +2202,17 @@ def main():
         investigation_table=part_c.get("investigation_table_top2_patterns"),
         segment_outputs=segment_outputs,
     )
+
+    # 2c) Part F impact estimation outputs
+    impact_outputs = build_impact_estimation_30d(fact, queue)
+
+    for name, df_out in impact_outputs.items():
+        write_csv(df_out, ANALYSIS_DIR / f"{name}.csv")
+
     # 3) Dashboard outputs
     export_charts(kpi_weekly, fact)
-    export_dashboard_xlsx(fact, weekly, queue, kpi_weekly, patterns_summary)
+    export_dashboard_xlsx(fact,weekly,queue,kpi_weekly,patterns_summary,impact_outputs=impact_outputs
+    )
 
     # 4) Final story outputs
     export_final_memo_pdf(

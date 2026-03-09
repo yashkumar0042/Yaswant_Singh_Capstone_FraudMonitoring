@@ -1,0 +1,4 @@
+scenario,capture_rate,expected_loss_prevented
+Worst,0.2,0.0
+Base,0.4,0.0
+Best,0.6,0.0
