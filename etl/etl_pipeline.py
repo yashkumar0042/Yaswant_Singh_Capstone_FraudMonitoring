@@ -30,7 +30,7 @@ RAW_DIR = PROJECT_ROOT / "raw_layer"
 DATA_DIR = PROJECT_ROOT / "data"                  # generated outputs only
 ANALYSIS_DIR = PROJECT_ROOT / "analysis"           # generated analysis artifacts
 DASHBOARD_DIR = PROJECT_ROOT / "dashboard"         # dashboard file
-EXPORTS_DIR = DASHBOARD_DIR / "exports"            # charts/images/pdf exports
+EXPORTS_DIR = DASHBOARD_DIR / "visualizations"     # charts/images/pdf exports
 FINAL_STORY_DIR = PROJECT_ROOT / "final_story"     # final memo/deck
 
 for d in [DATA_DIR, ANALYSIS_DIR, DASHBOARD_DIR, EXPORTS_DIR, FINAL_STORY_DIR]:
