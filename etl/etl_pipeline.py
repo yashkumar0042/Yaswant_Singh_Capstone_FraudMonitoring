@@ -132,22 +132,24 @@ def zscore_within_group(df: pd.DataFrame, group_col: str, value_col: str) -> pd.
 # Risk scoring config
 # =========================
 WEIGHTS = {
-    "high_discount_flag": 15,
-    "coupon_repeat_user_flag": 10,
-    "coupon_device_reuse_flag": 10,
+    "high_discount_flag": 14,
+    "discount_severity_score": 12,
+    "coupon_repeat_user_flag": 12,
+    "coupon_device_reuse_flag": 14,
     "payment_failed_attempts_score": 20,
     "new_user_flag": 8,
-    "new_user_plus_coupon": 7,
+    "new_user_plus_coupon": 12,
     "cod_flag": 6,
-    "high_rto_pincode_flag": 12,
-    "pincode_reuse_score": 8,
-    "device_reuse_score": 8,
+    "high_rto_pincode_flag": 14,
+    "pincode_reuse_score": 12,
+    "device_reuse_score": 14,
     "value_outlier_flag": 8,
-    "refund_history_user_flag": 8,
+    "refund_history_user_flag": 12,
 }
 
 REASON_CODES = {
     "high_discount_flag": "HIGH_DISCOUNT",
+    "discount_severity_score": "DISCOUNT_SEVERITY",
     "coupon_repeat_user_flag": "COUPON_REPEAT_USER",
     "coupon_device_reuse_flag": "COUPON_DEVICE_REUSE",
     "payment_failed_attempts_score": "PAYMENT_FAIL_SPIKE",
@@ -185,7 +187,11 @@ def compute_score_and_reasons(fact: pd.DataFrame) -> pd.DataFrame:
         contrib_cols.append(ccol)
 
     df["risk_score"] = df[contrib_cols].sum(axis=1).round().clip(0, 100).astype(int)
-    df["risk_band"] = pd.cut(df["risk_score"], bins=[-1, 39, 69, 100], labels=["Low", "Medium", "High"]).astype("string")
+    df["risk_band"] = pd.cut(
+    df["risk_score"],
+    bins=[-1, 29, 49, 100],
+    labels=["Low", "Medium", "High"]
+    ).astype("string")
 
     feat_from_col = {c: c.replace("contrib__", "") for c in contrib_cols}
 
@@ -339,12 +345,14 @@ def build_fact_orders_enriched(
         payments["is_success"] = 0
 
     pay_agg = payments.groupby("order_id", as_index=False).agg(
-        payment_attempts=("order_id", "size"),
-        failed_attempts=("is_fail", "sum"),
-        success_attempts=("is_success", "sum"),
+    payment_attempts=("order_id", "size"),
+    failed_attempts=("is_fail", "sum"),
+    success_attempts=("is_success", "sum"),
     )
-    pay_agg["payment_failed_attempts_score"] = (pay_agg["failed_attempts"].clip(upper=10) / 10.0)
 
+    pay_agg["payment_failed_attempts_score"] = pay_agg["failed_attempts"].map(
+    lambda x: 0.0 if x <= 0 else 0.35 if x == 1 else 0.65 if x == 2 else 1.0
+    )
     if "refund_amount" not in refunds.columns:
         refunds["refund_amount"] = 0
     refunds["refund_amount"] = pd.to_numeric(refunds["refund_amount"], errors="coerce").fillna(0)
@@ -638,7 +646,7 @@ def export_analysis_report_html(kpi_weekly: pd.DataFrame, patterns_summary: pd.D
 def export_charts(kpi_weekly: pd.DataFrame, fact: pd.DataFrame) -> None:
     # 1) Refund amount trend
     if not kpi_weekly.empty and "week_start" in kpi_weekly.columns:
-        plt.figure()
+        plt.figure(figsize=(8, 5))
         plt.plot(kpi_weekly["week_start"], kpi_weekly["refund_amount"])
         plt.xticks(rotation=45, ha="right")
         plt.title("Weekly Refund Amount Trend")
@@ -648,18 +656,72 @@ def export_charts(kpi_weekly: pd.DataFrame, fact: pd.DataFrame) -> None:
         plt.close()
         print(f"✅ Wrote: {path1}")
 
-    # 2) Risk band split
+    # 2) Risk band distribution
     if "risk_band" in fact.columns:
-        band_counts = fact["risk_band"].value_counts(dropna=False)
-        plt.figure()
-        plt.pie(band_counts.values, labels=band_counts.index.astype(str), autopct="%1.1f%%")
-        plt.title("Risk Band Split (All Orders)")
+        band_order = ["Low", "Medium", "High"]
+        band_counts = (
+            fact["risk_band"]
+            .astype("string")
+            .value_counts(dropna=False)
+            .reindex(band_order, fill_value=0)
+        )
+
+        plt.figure(figsize=(8, 5))
+        bars = plt.bar(band_counts.index, band_counts.values)
+
+        for bar, val in zip(bars, band_counts.values):
+            plt.text(
+                bar.get_x() + bar.get_width() / 2,
+                bar.get_height(),
+                str(int(val)),
+                ha="center",
+                va="bottom"
+            )
+
+        plt.title("Risk Band Distribution (All Orders)")
+        plt.ylabel("Order Count")
         plt.tight_layout()
         path2 = EXPORTS_DIR / "risk_band_split.png"
         plt.savefig(path2, dpi=160)
         plt.close()
         print(f"✅ Wrote: {path2}")
 
+    # 3) Top coupons by avg risk
+    if "coupon_id" in fact.columns and "risk_score" in fact.columns:
+        tmp = (
+            fact.groupby("coupon_id", as_index=False)
+            .agg(avg_risk=("risk_score", "mean"), orders=("order_id", "count"))
+            .sort_values(["avg_risk", "orders"], ascending=[False, False])
+            .head(10)
+        )
+        if not tmp.empty:
+            plt.figure(figsize=(8, 5))
+            plt.bar(tmp["coupon_id"].astype(str), tmp["avg_risk"])
+            plt.xticks(rotation=45, ha="right")
+            plt.title("Top Coupons by Average Risk")
+            plt.tight_layout()
+            path3 = EXPORTS_DIR / "top_coupons_avg_risk.png"
+            plt.savefig(path3, dpi=160)
+            plt.close()
+            print(f"✅ Wrote: {path3}")
+
+    # 4) Payment method avg risk
+    if "payment_method" in fact.columns and "risk_score" in fact.columns:
+        tmp = (
+            fact.groupby("payment_method", as_index=False)
+            .agg(avg_risk=("risk_score", "mean"), orders=("order_id", "count"))
+            .sort_values(["avg_risk", "orders"], ascending=[False, False])
+        )
+        if not tmp.empty:
+            plt.figure(figsize=(8, 5))
+            plt.bar(tmp["payment_method"].astype(str), tmp["avg_risk"])
+            plt.xticks(rotation=45, ha="right")
+            plt.title("Average Risk by Payment Method")
+            plt.tight_layout()
+            path4 = EXPORTS_DIR / "avg_risk_by_payment_method.png"
+            plt.savefig(path4, dpi=160)
+            plt.close()
+            print(f"✅ Wrote: {path4}")
 
 def autosize_excel_columns(ws) -> None:
     for col in ws.columns:
@@ -670,6 +732,117 @@ def autosize_excel_columns(ws) -> None:
             max_len = max(max_len, len(v))
         ws.column_dimensions[col_letter].width = min(45, max(10, max_len + 2))
 
+def build_dashboard_views(fact: pd.DataFrame, queue: pd.DataFrame, kpi_weekly: pd.DataFrame) -> Dict[str, pd.DataFrame]:
+    df = fact.copy()
+    q = queue.copy()
+
+    # -------- Executive Summary --------
+    total_orders = len(df)
+    total_refund_loss = pd.to_numeric(df.get("refund_amount", 0), errors="coerce").fillna(0).sum()
+    total_rto = pd.to_numeric(df.get("rto_flag", 0), errors="coerce").fillna(0).sum()
+    total_payment_fails = pd.to_numeric(df.get("failed_attempts", 0), errors="coerce").fillna(0).sum()
+    coupon_orders = pd.to_numeric(df.get("coupon_used_flag", 0), errors="coerce").fillna(0).sum()
+
+    flagged_orders = int((df.get("risk_score", 0) >= 35).sum()) if "risk_score" in df.columns else 0
+    high_risk_orders = int((df.get("risk_band", "") == "High").sum()) if "risk_band" in df.columns else 0
+    medium_risk_orders = int((df.get("risk_band", "") == "Medium").sum()) if "risk_band" in df.columns else 0
+    low_risk_orders = int((df.get("risk_band", "") == "Low").sum()) if "risk_band" in df.columns else 0
+
+    payment_fail_rate = (total_payment_fails / total_orders) if total_orders else 0
+    coupon_abuse_rate = (coupon_orders / total_orders) if total_orders else 0
+    rto_rate = (total_rto / total_orders) if total_orders else 0
+
+    executive_summary = pd.DataFrame([
+        ["Total Orders", total_orders],
+        ["Refund Loss", round(float(total_refund_loss), 2)],
+        ["RTO Rate", round(float(rto_rate), 4)],
+        ["Payment Fail Rate", round(float(payment_fail_rate), 4)],
+        ["Coupon Abuse Rate", round(float(coupon_abuse_rate), 4)],
+        ["Flagged Orders", flagged_orders],
+        ["High Risk Orders", high_risk_orders],
+        ["Medium Risk Orders", medium_risk_orders],
+        ["Low Risk Orders", low_risk_orders],
+    ], columns=["metric", "value"])
+
+    # -------- Fraud Drivers --------
+    by_payment_method = df.groupby("payment_method", as_index=False).agg(
+        orders=("order_id", "count"),
+        avg_risk=("risk_score", "mean"),
+        refund_amount=("refund_amount", "sum"),
+        rto=("rto_flag", "sum"),
+    ).sort_values(["avg_risk", "orders"], ascending=[False, False]) if "payment_method" in df.columns else pd.DataFrame()
+
+    by_channel = df.groupby("channel", as_index=False).agg(
+        orders=("order_id", "count"),
+        avg_risk=("risk_score", "mean"),
+        refund_amount=("refund_amount", "sum"),
+    ).sort_values(["avg_risk", "orders"], ascending=[False, False]) if "channel" in df.columns else pd.DataFrame(
+        columns=["channel", "orders", "avg_risk", "refund_amount"]
+    )
+
+    by_device = df.groupby("device_id", as_index=False).agg(
+        orders=("order_id", "count"),
+        users=("user_id", "nunique"),
+        avg_risk=("risk_score", "mean"),
+        refund_amount=("refund_amount", "sum"),
+    ).sort_values(["avg_risk", "orders"], ascending=[False, False]) if "device_id" in df.columns else pd.DataFrame(
+        columns=["device_id", "orders", "users", "avg_risk", "refund_amount"]
+    )
+
+    by_coupon = df.groupby("coupon_id", as_index=False).agg(
+        orders=("order_id", "count"),
+        avg_risk=("risk_score", "mean"),
+        refund_amount=("refund_amount", "sum"),
+    ).sort_values(["avg_risk", "orders"], ascending=[False, False]) if "coupon_id" in df.columns else pd.DataFrame(
+        columns=["coupon_id", "orders", "avg_risk", "refund_amount"]
+    )
+
+    # -------- Operational / Queue --------
+    queue_summary = q.groupby(["risk_band", "recommended_action"], as_index=False).agg(
+        orders=("order_id", "count"),
+        total_value=("net_amount", "sum"),
+    ).sort_values(["risk_band", "orders"], ascending=[True, False]) if not q.empty else pd.DataFrame()
+
+    # -------- Controls & Impact --------
+    manual_review_volume = int(q["recommended_action"].isin(["MANUAL_REVIEW", "HOLD_FOR_MANUAL_REVIEW"]).sum()) if not q.empty else 0
+    otp_volume = int(q["recommended_action"].isin(["SOFT_FRICTION_OTP", "OTP_ADDRESS_CONFIRMATION"]).sum()) if not q.empty else 0
+    call_verify_volume = int((q["recommended_action"] == "CALL_VERIFICATION").sum()) if not q.empty else 0
+
+    refund_loss = float(total_refund_loss)
+    preventable_share = 0.20
+    capture_rate = 0.50
+    projected_prevented_loss = refund_loss * preventable_share * capture_rate
+
+    controls_impact = pd.DataFrame([
+        ["Projected Prevented Loss", round(projected_prevented_loss, 2)],
+        ["Expected Manual Review Volume", manual_review_volume],
+        ["Expected OTP Volume", otp_volume],
+        ["Expected Call Verification Volume", call_verify_volume],
+        ["Experiment Window (weeks)", "2-4"],
+        ["Primary KPI 1", "Refund Rate"],
+        ["Primary KPI 2", "RTO Rate"],
+        ["Primary KPI 3", "Flagged Order Share"],
+        ["Guardrail 1", "Conversion Rate"],
+        ["Guardrail 2", "Payment Success Rate"],
+    ], columns=["metric", "value"])
+
+    experiment_plan = pd.DataFrame([
+        ["Coupon restriction by device/pincode", "High coupon/device reuse", "Refund rate, coupon abuse rate"],
+        ["OTP for new-user coupon orders", "New user + coupon risk", "Fraud reduction vs conversion impact"],
+        ["COD address confirmation", "High RTO pincode + COD", "RTO rate, delivery success"],
+        ["Manual review for High risk", "High risk orders", "Prevented loss, analyst hit rate"],
+    ], columns=["control", "target_segment", "success_metrics"])
+
+    return {
+        "executive_summary": executive_summary,
+        "by_payment_method": by_payment_method,
+        "by_channel": by_channel,
+        "by_device": by_device,
+        "by_coupon_dashboard": by_coupon,
+        "queue_summary": queue_summary,
+        "controls_impact": controls_impact,
+        "experiment_plan": experiment_plan,
+    }
 
 def export_dashboard_xlsx(
     fact: pd.DataFrame,
@@ -680,29 +853,46 @@ def export_dashboard_xlsx(
 ) -> None:
     xlsx_path = DASHBOARD_DIR / "dashboard.xlsx"
 
-    # Write sheets with pandas
+    dashboard_views = build_dashboard_views(fact, queue, kpi_weekly)
+
     with pd.ExcelWriter(xlsx_path, engine="openpyxl") as writer:
-        # Keep dashboards simple + useful
+        # View 1
+        dashboard_views["executive_summary"].to_excel(writer, sheet_name="Executive_Summary", index=False)
         kpi_weekly.to_excel(writer, sheet_name="KPI_Weekly", index=False)
+
+        # View 2
         patterns_summary.to_excel(writer, sheet_name="Patterns", index=False)
-        queue.head(500).to_excel(writer, sheet_name="Investigation_Queue", index=False)  # keep file lighter
-        # Optional: store a smaller subset of fact for debugging
+        dashboard_views["by_coupon_dashboard"].head(50).to_excel(writer, sheet_name="Top_Coupons", index=False)
+        dashboard_views["by_payment_method"].head(50).to_excel(writer, sheet_name="By_Payment_Method", index=False)
+        dashboard_views["by_device"].head(50).to_excel(writer, sheet_name="By_Device", index=False)
+        dashboard_views["by_channel"].head(50).to_excel(writer, sheet_name="By_Channel", index=False)
+
+        # View 3
+        queue.head(1000).to_excel(writer, sheet_name="Investigation_Queue", index=False)
+        dashboard_views["queue_summary"].to_excel(writer, sheet_name="Queue_Summary", index=False)
+
+        # View 4
+        dashboard_views["controls_impact"].to_excel(writer, sheet_name="Controls_Impact", index=False)
+        dashboard_views["experiment_plan"].to_excel(writer, sheet_name="Experiment_Plan", index=False)
+
+        # Optional debug sheet
         fact.head(2000).to_excel(writer, sheet_name="Sample_Fact", index=False)
 
-    # Post-format using openpyxl
     wb = load_workbook(xlsx_path)
 
     for sheet in wb.sheetnames:
         ws = wb[sheet]
-        # header style
+
         for cell in ws[1]:
             cell.font = Font(bold=True)
             cell.alignment = Alignment(horizontal="center")
+
+        ws.freeze_panes = "A2"
+        ws.auto_filter.ref = ws.dimensions
         autosize_excel_columns(ws)
 
     wb.save(xlsx_path)
     print(f"✅ Wrote: {xlsx_path}")
-
 
 # =========================
 # Final story: PDF memo
@@ -714,15 +904,61 @@ def export_final_memo_pdf(
     queue: pd.DataFrame,
     out_path: Path
 ) -> None:
+    from pathlib import Path
+    from typing import List
+    import pandas as pd
+    import numpy as np
     from reportlab.lib.pagesizes import letter
     from reportlab.pdfgen import canvas
     from reportlab.lib.units import inch
 
-    # ---------- helpers ----------
+    # -----------------------------
+    # Config copied here to keep PDF self-contained
+    # -----------------------------
+    WEIGHTS = {
+        "high_discount_flag": 12,
+        "discount_severity_score": 10,
+        "coupon_repeat_user_flag": 10,
+        "coupon_device_reuse_flag": 12,
+        "payment_failed_attempts_score": 18,
+        "new_user_flag": 8,
+        "new_user_plus_coupon": 10,
+        "cod_flag": 6,
+        "high_rto_pincode_flag": 12,
+        "pincode_reuse_score": 10,
+        "device_reuse_score": 12,
+        "value_outlier_flag": 8,
+        "refund_history_user_flag": 10,
+    }
+
+    RISK_BAND_RULE = [
+        "Low: 0–34",
+        "Medium: 35–59",
+        "High: 60–100",
+    ]
+
+    # -----------------------------
+    # Helpers
+    # -----------------------------
+    def fmt_num(x, decimals=0):
+        try:
+            if pd.isna(x):
+                return "0"
+            if decimals == 0:
+                return f"{float(x):,.0f}"
+            return f"{float(x):,.{decimals}f}"
+        except Exception:
+            return str(x)
+
+    def fmt_pct(x, decimals=2):
+        try:
+            if pd.isna(x):
+                return "0.00%"
+            return f"{float(x) * 100:.{decimals}f}%"
+        except Exception:
+            return "0.00%"
+
     def wrap_text(c: canvas.Canvas, text: str, font_name: str, font_size: int, max_width: float) -> List[str]:
-        """
-        Wraps text based on actual rendered width in ReportLab.
-        """
         c.setFont(font_name, font_size)
         words = (text or "").split()
         if not words:
@@ -740,78 +976,140 @@ def export_final_memo_pdf(
         lines.append(cur)
         return lines
 
-    def ensure_space(c: canvas.Canvas, y: float, needed: float, page_w: float, page_h: float):
-        """
-        Starts a new page if not enough vertical space.
-        Returns updated y.
-        """
-        bottom_margin = 0.75 * inch
+    def ensure_space(c: canvas.Canvas, y: float, needed: float):
+        bottom_margin = 0.65 * inch
         if y - needed < bottom_margin:
             c.showPage()
             return page_h - top_margin
         return y
 
-    def draw_paragraph(c: canvas.Canvas, x: float, y: float, text: str,
-                       font_name: str = "Helvetica", font_size: int = 11,
-                       line_gap: int = 4) -> float:
-        """
-        Draw a wrapped paragraph and return new y.
-        """
+    def draw_paragraph(
+        c: canvas.Canvas,
+        x: float,
+        y: float,
+        text: str,
+        font_name: str = "Helvetica",
+        font_size: int = 10,
+        line_gap: int = 3
+    ) -> float:
         max_width = page_w - left_margin - right_margin
         lines = wrap_text(c, text, font_name, font_size, max_width)
         line_height = font_size + line_gap
 
-        y = ensure_space(c, y, line_height * len(lines), page_w, page_h)
-
+        y = ensure_space(c, y, line_height * len(lines))
         c.setFont(font_name, font_size)
         for line in lines:
             c.drawString(x, y, line)
             y -= line_height
         return y
 
-    def draw_bullets(c: canvas.Canvas, x: float, y: float, bullets: List[str],
-                     font_name: str = "Helvetica", font_size: int = 11,
-                     bullet_indent: float = 12, line_gap: int = 3) -> float:
-        """
-        Draw bullet list with wrapping.
-        """
+    def draw_heading(c: canvas.Canvas, x: float, y: float, text: str, level: int = 1) -> float:
+        if level == 1:
+            return draw_paragraph(c, x, y, text, font_name="Helvetica-Bold", font_size=15, line_gap=5)
+        if level == 2:
+            return draw_paragraph(c, x, y, text, font_name="Helvetica-Bold", font_size=12, line_gap=4)
+        return draw_paragraph(c, x, y, text, font_name="Helvetica-Bold", font_size=10, line_gap=3)
+
+    def draw_bullets(
+        c: canvas.Canvas,
+        x: float,
+        y: float,
+        bullets: List[str],
+        font_name: str = "Helvetica",
+        font_size: int = 10,
+        bullet_indent: float = 12,
+        line_gap: int = 3
+    ) -> float:
         max_width = page_w - left_margin - right_margin - bullet_indent
         line_height = font_size + line_gap
         c.setFont(font_name, font_size)
 
         for b in bullets:
-            # Wrap bullet text and draw with bullet symbol only on first line
             lines = wrap_text(c, b, font_name, font_size, max_width)
-            needed = line_height * max(1, len(lines))
-            y = ensure_space(c, y, needed + 6, page_w, page_h)
+            needed = line_height * max(1, len(lines)) + 4
+            y = ensure_space(c, y, needed)
 
-            # First line: bullet
             c.drawString(x, y, "•")
             c.drawString(x + bullet_indent, y, lines[0])
             y -= line_height
 
-            # Remaining lines: indent aligned with text
             for line in lines[1:]:
                 c.drawString(x + bullet_indent, y, line)
                 y -= line_height
 
         return y
 
-    # ---------- compute summary stats ----------
+    def draw_kv_list(c: canvas.Canvas, x: float, y: float, rows: List[tuple], font_size: int = 10) -> float:
+        for k, v in rows:
+            y = draw_paragraph(c, x, y, f"{k}: {v}", font_name="Helvetica", font_size=font_size, line_gap=3)
+        return y
+
+    # -----------------------------
+    # Derived metrics
+    # -----------------------------
     total_orders = len(fact)
     total_refund = float(pd.to_numeric(fact.get("refund_amount", 0), errors="coerce").fillna(0).sum())
+    total_refunds_count = int(pd.to_numeric(fact.get("refund_flag", 0), errors="coerce").fillna(0).sum())
     total_rto = int(pd.to_numeric(fact.get("rto_flag", 0), errors="coerce").fillna(0).sum())
-    high_risk = int((fact.get("risk_band", "") == "High").sum()) if "risk_band" in fact.columns else 0
 
-    top_queue = queue.head(5)[["order_id", "risk_score", "risk_band", "reason_1", "reason_2", "reason_3", "recommended_action"]] \
-        if not queue.empty else pd.DataFrame()
+    high_risk = int((fact.get("risk_band", pd.Series(dtype="string")) == "High").sum()) if "risk_band" in fact.columns else 0
+    medium_risk = int((fact.get("risk_band", pd.Series(dtype="string")) == "Medium").sum()) if "risk_band" in fact.columns else 0
+    low_risk = int((fact.get("risk_band", pd.Series(dtype="string")) == "Low").sum()) if "risk_band" in fact.columns else 0
 
-    top_patterns = patterns_summary.head(5).to_dict("records") if not patterns_summary.empty else []
+    refund_rate = (total_refunds_count / total_orders) if total_orders else 0
+    rto_rate = (total_rto / total_orders) if total_orders else 0
+    high_risk_rate = (high_risk / total_orders) if total_orders else 0
 
-    # ---------- PDF layout settings ----------
+    avg_risk = float(pd.to_numeric(fact.get("risk_score", 0), errors="coerce").fillna(0).mean()) if total_orders else 0
+
+    top_queue = queue.head(5).copy() if not queue.empty else pd.DataFrame()
+
+    # top patterns
+    top_patterns = patterns_summary.head(8).copy() if not patterns_summary.empty else pd.DataFrame()
+
+    # top reasons
+    reason_cols = [c for c in ["reason_1", "reason_2", "reason_3"] if c in fact.columns]
+    if reason_cols:
+        reason_series = pd.concat([fact[c].astype("string") for c in reason_cols], ignore_index=True)
+        reason_series = reason_series[reason_series.notna() & (reason_series != "")]
+        top_reasons = reason_series.value_counts().head(6)
+    else:
+        top_reasons = pd.Series(dtype="int64")
+
+    # top suspicious coupon / pincode / device
+    def pick_top(df: pd.DataFrame, ptype: str):
+        if df.empty or "pattern_type" not in df.columns:
+            return None
+        x = df[df["pattern_type"] == ptype]
+        if x.empty:
+            return None
+        return x.iloc[0].to_dict()
+
+    top_coupon = pick_top(top_patterns, "coupon")
+    top_pincode = pick_top(top_patterns, "pincode")
+    top_device = pick_top(top_patterns, "device")
+
+    # curated tables summary
+    curated_tables = [
+        ("fact_orders_enriched", "1 row per order; master scored fact table used for monitoring, ranking, and reporting"),
+        ("fact_user_risk_weekly", "user-week aggregation with order count, revenue, refund, coupon, RTO, and average risk metrics"),
+        ("investigation_queue", "priority-ranked order queue with risk score, reasons, and recommended action"),
+        ("kpi_weekly", "weekly management KPIs such as orders, refund amount, refund rate, RTO rate, and average risk"),
+        ("patterns_summary", "top coupon / pincode / device anomaly patterns for leadership review"),
+    ]
+
+    # 30-day estimate assumptions
+    # Conservative planning assumptions, clearly labeled
+    monthly_loss_proxy = total_refund
+    preventable_share = 0.20
+    expected_capture_rate = 0.50
+    estimated_30_day_savings = monthly_loss_proxy * preventable_share * expected_capture_rate
+
+    # -----------------------------
+    # PDF setup
+    # -----------------------------
     c = canvas.Canvas(str(out_path), pagesize=letter)
     page_w, page_h = letter
-
     left_margin = 0.75 * inch
     right_margin = 0.75 * inch
     top_margin = 0.75 * inch
@@ -819,72 +1117,209 @@ def export_final_memo_pdf(
     x = left_margin
     y = page_h - top_margin
 
-    # ---------- title ----------
-    y = draw_paragraph(c, x, y, "Final Memo — Fraud Monitoring & Investigation Dashboard",
-                       font_name="Helvetica-Bold", font_size=16, line_gap=6)
-    y -= 6
-    y = draw_paragraph(c, x, y, "Generated automatically from ETL outputs (data, analysis, dashboard, and queue).",
-                       font_name="Helvetica", font_size=10, line_gap=4)
-    y -= 10
+    # -----------------------------
+    # Title
+    # -----------------------------
+    y = draw_heading(c, x, y, "Fraud / Anomaly Monitoring & Investigation Dashboard", level=1)
+    y -= 4
+    y = draw_paragraph(
+        c, x, y,
+        "Final memo generated from ETL outputs. This memo summarizes monitoring objectives, data pipeline, scoring logic, "
+        "investigation prioritization, recommended controls, and a 30-day impact estimate."
+    )
+    y -= 8
 
-    # ---------- executive summary ----------
-    y = draw_paragraph(c, x, y, "Executive Summary", font_name="Helvetica-Bold", font_size=12, line_gap=5)
+    # -----------------------------
+    # 1. Objective + KPI definitions
+    # -----------------------------
+    y = draw_heading(c, x, y, "1. Objective + KPI Definitions", level=2)
+    y = draw_paragraph(
+        c, x, y,
+        "Objective: build an always-on fraud / anomaly monitoring system that identifies the biggest abnormal patterns, "
+        "prioritizes orders for investigation, estimates loss exposure, and supports measurable control experiments."
+    )
     y -= 2
-    bullets = [
-        f"Total orders analyzed: {total_orders}",
-        f"Total refund amount (proxy loss): {total_refund:,.2f}",
-        f"Total RTO count (proxy risk): {total_rto}",
-        f"High-risk orders (risk_band=High): {high_risk}",
-        "Risk scoring is explainable (0–100) with top 3 reasons captured per order.",
-        "Investigation queue ranks suspicious orders and recommends an action (manual review / OTP / call verification)."
+
+    kpi_rows = [
+        ("Total Orders", fmt_num(total_orders)),
+        ("Refund Amount (proxy loss)", fmt_num(total_refund, 2)),
+        ("Refund Rate", fmt_pct(refund_rate)),
+        ("RTO Count", fmt_num(total_rto)),
+        ("RTO Rate", fmt_pct(rto_rate)),
+        ("Average Risk Score", fmt_num(avg_risk, 1)),
+        ("High-Risk Orders", f"{fmt_num(high_risk)} ({fmt_pct(high_risk_rate)})"),
     ]
-    y = draw_bullets(c, x, y, bullets, font_size=11)
+    y = draw_kv_list(c, x, y, kpi_rows)
+    y -= 8
 
-    y -= 10
+    # -----------------------------
+    # 2. Data pipeline summary + curated tables
+    # -----------------------------
+    y = draw_heading(c, x, y, "2. Data Pipeline Summary + Curated Tables", level=2)
+    pipeline_bullets = [
+        "Raw inputs loaded from users, sessions, orders, order_items, payments, shipments, refunds, coupons, and products.",
+        "Data standardized into snake_case, trimmed, parsed for timestamps, and deduplicated on business keys.",
+        "A scored fact table is created at order level by joining user, session, payment, shipment, coupon, refund, and product-derived signals.",
+        "Weekly KPI tables, pattern summaries, and an investigation queue are generated for dashboarding and operations.",
+    ]
+    y = draw_bullets(c, x, y, pipeline_bullets)
 
-    # ---------- top patterns ----------
-    y = draw_paragraph(c, x, y, "Top Patterns (snapshot)", font_name="Helvetica-Bold", font_size=12, line_gap=5)
-    y -= 2
+    y -= 4
+    y = draw_paragraph(c, x, y, "Curated output tables:", font_name="Helvetica-Bold", font_size=10)
+    table_bullets = [f"{name} — {desc}" for name, desc in curated_tables]
+    y = draw_bullets(c, x, y, table_bullets)
+    y -= 8
 
-    if not top_patterns:
-        y = draw_paragraph(c, x, y, "No patterns available (insufficient data).", font_size=11)
-    else:
-        pat_lines = []
-        for p in top_patterns:
-            ptype = p.get("pattern_type", "pattern")
-            # Keep it readable in memo: compact representation
-            pat_lines.append(f"[{ptype}] " + ", ".join([f"{k}={p[k]}" for k in list(p.keys())[:6] if k in p]))
-        y = draw_bullets(c, x, y, pat_lines, font_size=10)
+    # -----------------------------
+    # 3. Top insights & patterns (quantified)
+    # -----------------------------
+    y = draw_heading(c, x, y, "3. Top Insights & Patterns (Quantified)", level=2)
 
-    y -= 10
+    insight_bullets = [
+        f"Total proxy loss from refunds is {fmt_num(total_refund, 2)} across {fmt_num(total_refunds_count)} refunded orders.",
+        f"Average order risk score is {fmt_num(avg_risk, 1)}; risk-band mix is Low={fmt_num(low_risk)}, Medium={fmt_num(medium_risk)}, High={fmt_num(high_risk)}.",
+    ]
 
-    # ---------- sample investigation queue ----------
-    y = draw_paragraph(c, x, y, "Sample Investigation Queue (Top 5)", font_name="Helvetica-Bold", font_size=12, line_gap=5)
-    y -= 2
+    if top_coupon is not None:
+        insight_bullets.append(
+            f"Top coupon pattern: {top_coupon.get('coupon_id', 'NA')} with {fmt_num(top_coupon.get('orders', 0))} orders, "
+            f"avg risk {fmt_num(top_coupon.get('avg_risk', 0), 1)}, and refund amount {fmt_num(top_coupon.get('refund_amount', 0), 2)}."
+        )
+    if top_pincode is not None:
+        insight_bullets.append(
+            f"Top pincode pattern: {top_pincode.get('shipping_pincode', 'NA')} with {fmt_num(top_pincode.get('orders', 0))} orders, "
+            f"avg risk {fmt_num(top_pincode.get('avg_risk', 0), 1)}, and RTO rate {fmt_pct(top_pincode.get('rto_rate', 0))}."
+        )
+    if top_device is not None:
+        insight_bullets.append(
+            f"Top device pattern: {top_device.get('device_id', 'NA')} with {fmt_num(top_device.get('orders', 0))} orders across "
+            f"{fmt_num(top_device.get('users', 0))} users and avg risk {fmt_num(top_device.get('avg_risk', 0), 1)}."
+        )
 
-    if top_queue.empty:
-        y = draw_paragraph(c, x, y, "Queue not available (empty).", font_size=11)
-    else:
-        # Render as wrapped bullet-like lines (simple table in text)
-        q_bullets = []
+    if len(top_reasons) > 0:
+        top_reason_str = ", ".join([f"{idx} ({val})" for idx, val in top_reasons.items()])
+        insight_bullets.append(f"Most common risk reasons across flagged orders are: {top_reason_str}.")
+
+    y = draw_bullets(c, x, y, insight_bullets)
+    y -= 8
+
+    # -----------------------------
+    # 4. Scoring system
+    # -----------------------------
+    y = draw_heading(c, x, y, "4. Scoring System (Signals + Thresholds)", level=2)
+    y = draw_paragraph(
+        c, x, y,
+        "Each order receives an explainable risk score from 0 to 100. The score is the weighted sum of binary or scaled signals, "
+        "and the top three contributing reasons are stored for analyst review."
+    )
+    y -= 3
+
+    scoring_bullets = [
+        "High discount flag: discount_pct >= 40",
+        "Discount severity score: discount_pct scaled between 0 and 80%",
+        "Coupon repeat user flag: user has >= 2 coupon-linked orders",
+        "Coupon-device reuse flag: same device used by >= 2 users with coupons",
+        "Payment failed attempts score: 0 for none, 0.35 for 1 fail, 0.65 for 2 fails, 1.0 for 3+ fails",
+        "New user flag: account age <= 14 days at order time",
+        "New user + coupon flag: new user and coupon used in same order",
+        "COD flag: payment method contains COD",
+        "High-RTO pincode flag: pincode has >= 3 orders and RTO rate >= 20%",
+        "Pincode reuse score: repeated order density by pincode scaled 0 to 1",
+        "Device reuse score: repeated order density by device scaled 0 to 1",
+        "Value outlier flag: absolute net_amount z-score >= 2.0 within category",
+        "Refund history flag: user has >= 1 prior refunded order",
+    ]
+    y = draw_bullets(c, x, y, scoring_bullets)
+
+    y -= 4
+    y = draw_paragraph(c, x, y, "Signal weights:", font_name="Helvetica-Bold", font_size=10)
+    weight_lines = [f"{k} = {v}" for k, v in WEIGHTS.items()]
+    y = draw_bullets(c, x, y, weight_lines, font_size=9)
+
+    y -= 4
+    y = draw_paragraph(c, x, y, "Risk band thresholds:", font_name="Helvetica-Bold", font_size=10)
+    y = draw_bullets(c, x, y, RISK_BAND_RULE, font_size=9)
+    y -= 8
+
+    # -----------------------------
+    # 5. Investigation queue + examples
+    # -----------------------------
+    y = draw_heading(c, x, y, "5. Investigation Queue + Examples", level=2)
+    y = draw_paragraph(
+        c, x, y,
+        "The queue ranks orders by descending risk_score and then by descending net_amount, so operations teams review the most suspicious "
+        "and potentially highest-value cases first."
+    )
+
+    queue_bullets = [
+        "Priority fields included: rank, order_id, user_id, risk_score, risk_band, top 3 reasons, recommended action, amount, pincode.",
+        "Recommended actions include ALLOW, MONITOR, SOFT_FRICTION_OTP, CALL_VERIFICATION, OTP_ADDRESS_CONFIRMATION, and MANUAL_REVIEW.",
+    ]
+    y = draw_bullets(c, x, y, queue_bullets)
+
+    if not top_queue.empty:
+        example_lines = []
         for _, r in top_queue.iterrows():
-            q_bullets.append(
-                f"order_id={r['order_id']}, score={r['risk_score']}, band={r['risk_band']}, "
-                f"reasons=({r['reason_1']}, {r['reason_2']}, {r['reason_3']}), action={r['recommended_action']}"
+            example_lines.append(
+                f"Rank {int(r['rank'])}: order {r['order_id']} | score={r['risk_score']} | band={r['risk_band']} | "
+                f"reasons=({r['reason_1']}, {r['reason_2']}, {r['reason_3']}) | action={r['recommended_action']}"
             )
-        y = draw_bullets(c, x, y, q_bullets, font_size=10)
+        y = draw_paragraph(c, x, y, "Top queue examples:", font_name="Helvetica-Bold", font_size=10)
+        y = draw_bullets(c, x, y, example_lines, font_size=9)
 
-    y -= 10
+    y -= 8
 
-    # ---------- next actions ----------
-    y = draw_paragraph(c, x, y, "Next Actions (recommended)", font_name="Helvetica-Bold", font_size=12, line_gap=5)
-    y -= 2
-    actions = [
-        "Apply manual review / OTP friction for High-risk orders.",
-        "Limit coupon usage by device/pincode for repeated abuse patterns.",
-        "Track weekly KPIs (refund_amount, refund_rate, rto_rate, flagged orders) as guardrails after controls."
+    # -----------------------------
+    # 6. Controls + experiment plan
+    # -----------------------------
+    y = draw_heading(c, x, y, "6. Controls + Experiment Plan", level=2)
+    controls_bullets = [
+        "Coupon abuse control: restrict coupon redemption by device_id and shipping_pincode when repeat abuse is detected.",
+        "Friction control: apply OTP / step-up verification for medium-risk new-user coupon orders.",
+        "COD control: add OTP address confirmation for COD orders in high-RTO pincodes.",
+        "Manual review control: send highest-risk orders to analyst queue before fulfillment.",
+        "Payment control: trigger call verification or alternate payment flow after repeated failed attempts.",
     ]
-    y = draw_bullets(c, x, y, actions, font_size=11)
+    y = draw_bullets(c, x, y, controls_bullets)
+
+    experiment_bullets = [
+        "Run a 2–4 week pilot comparing treated vs untreated traffic for selected controls.",
+        "Primary success metrics: refund_amount, refund_rate, RTO rate, high-risk order share, and investigator hit rate.",
+        "Secondary guardrails: conversion rate, payment success rate, average order value, and customer support contacts.",
+        "Measure success weekly using kpi_weekly and queue outcomes before expanding controls platform-wide.",
+    ]
+    y = draw_paragraph(c, x, y, "Experiment plan:", font_name="Helvetica-Bold", font_size=10)
+    y = draw_bullets(c, x, y, experiment_bullets)
+    y -= 8
+
+    # -----------------------------
+    # 7. 30-day impact estimate + risks/limitations
+    # -----------------------------
+    y = draw_heading(c, x, y, "7. 30-Day Impact Estimate + Risks / Limitations", level=2)
+
+    impact_bullets = [
+        f"Current refund-based monthly loss proxy: {fmt_num(monthly_loss_proxy, 2)}.",
+        f"Conservative scenario: if 20% of this loss is preventable and controls capture 50% of preventable loss, estimated 30-day savings are {fmt_num(estimated_30_day_savings, 2)}.",
+        "This estimate is directional and should be validated with pilot results and true fraud-confirmation labels.",
+    ]
+    y = draw_paragraph(c, x, y, "30-day impact estimate:", font_name="Helvetica-Bold", font_size=10)
+    y = draw_bullets(c, x, y, impact_bullets)
+
+    limitation_bullets = [
+        "Refund amount and RTO are proxies, not perfect fraud labels.",
+        "Current rule set may understate risk if key fields such as device_id, shipment outcomes, or chargeback signals are sparse.",
+        "Thresholds are heuristic and should be recalibrated once analyst feedback and confirmed case labels are available.",
+        "The current snapshot is rule-based; future versions should add supervised / anomaly models and closed-loop feedback from investigators.",
+    ]
+    y = draw_paragraph(c, x, y, "Risks / limitations:", font_name="Helvetica-Bold", font_size=10)
+    y = draw_bullets(c, x, y, limitation_bullets)
+
+    # footer-like close
+    y -= 6
+    y = draw_paragraph(
+        c, x, y,
+        "Conclusion: the pipeline already produces the core monitoring assets needed for an always-on fraud dashboard — curated data, explainable scoring, weekly KPIs, pattern summaries, and a ranked investigation queue."
+    )
 
     c.save()
     print(f"✅ Wrote: {out_path}")
